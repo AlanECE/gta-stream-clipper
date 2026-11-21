@@ -82,7 +82,7 @@ def clip_live(url: str, opts, inf: dict | None = None) -> list[Path]:
     work.mkdir(parents=True, exist_ok=True)
     out_dir = Path(opts.sortie)
     live_chat = None
-    if plat == "twitch":
+    if plat == "twitch" and not getattr(opts, "sans_chat", False):
         login = inf.get("uploader_id") or url.rstrip("/").split("/")[-1]
         live_chat = chat.TwitchLiveChat(login)
         live_chat.start()
@@ -156,7 +156,7 @@ def clip_live(url: str, opts, inf: dict | None = None) -> list[Path]:
             if layout.kind == "split" and (best_layout is None or layout.conf > best_layout.conf):
                 best_layout = layout
             words = _words_in(ws, st, en, st)
-            title = opts.titre.format(streamer=render.display_name(streamer), jeu=opts.jeu.upper()) if opts.titre \
+            title = render.fill_title(opts.titre, streamer, opts.jeu) if opts.titre \
                 else render.auto_title(streamer, opts.jeu, analyze.mood(words), n - 1, opts.titre_langue)
             base = f"{slug(streamer, 30)}_live_{dt.datetime.now():%Y%m%d_%H%M%S}"
             made.append(write_clip(opts, out_dir, base, section, layout, words, st - a, en - st, title, streamer,

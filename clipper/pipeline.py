@@ -18,25 +18,27 @@ def _words_in(ws: list[Word], a: float, b: float, shift: float) -> list[Word]:
     return [Word(w.start - shift, w.end - shift, w.text) for w in ws if w.start >= a - 0.05 and w.end <= b + 0.3]
 
 
+def style_of(opts) -> dict:
+    return {"sep": 8 if getattr(opts, "separateur", False) else 0, "max_words": int(getattr(opts, "mots", 2) or 2),
+            "highlight": getattr(opts, "surlignage", None) or "violet", "sub_y": getattr(opts, "sous_titres_y", None)}
+
+
 def write_clip(opts, out_dir: Path, base: str, section: Path, layout, words, t_in, dur, title, streamer,
                meta: dict) -> Path:
     mp4 = out_dir / f"{base}.mp4"
-    render.render(section, mp4, layout, words, t_in, dur, title, streamer, title_dur=opts.titre_duree,
-                  sep=0 if opts.sans_separateur else 8)
+    st = style_of(opts)
+    if getattr(opts, "sans_titre", False):
+        title = ""
+    render.render(section, mp4, layout, words, t_in, dur, title, streamer, **st)
     tag = slug(streamer, 30).replace("-", "")
     jeu_tag = slug(opts.jeu, 20).replace("-", "")
-    name = render.display_name(streamer)
-    legende = title[:1] + title[1:].lower()
-    legende = legende.replace(name.lower(), name.title()).replace(name[:1] + name[1:].lower(), name.title())
-    legende = legende.replace(opts.jeu.lower(), opts.jeu)
     (out_dir / f"{base}.txt").write_text(
         f"{title}\n\n"
-        f"Légende : {legende} 😭 #{jeu_tag} #{tag} #clips #twitch #fyp\n\n"
+        f"Légende : {title} #{jeu_tag} #{tag} #clips #twitch #fyp\n\n"
         f"Source : {meta.get('source_link', meta.get('source'))}\n"
         f"Ce qu'il dit : {' '.join(w.text for w in words)}\n", encoding="utf-8")
     meta = {**meta, "title": title, "streamer": streamer, "section": str(section.resolve()), "t_in": t_in,
-            "dur": dur, "layout": layout.to_dict(), "words": [asdict(w) for w in words],
-            "titre_duree": opts.titre_duree, "sep": 0 if opts.sans_separateur else 8}
+            "dur": dur, "layout": layout.to_dict(), "words": [asdict(w) for w in words], "style": st}
     (out_dir / f"{base}.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     return mp4
 
@@ -105,7 +107,7 @@ def clip_stream(url: str, opts) -> list[Path]:
         dur = m.end - m.start
         words = _words_in(m.words, m.start, m.end, m.start)
         title = titles.get(id(m)) or opts.titre
-        title = title.format(streamer=render.display_name(streamer), jeu=opts.jeu.upper()) if title \
+        title = render.fill_title(title, streamer, opts.jeu) if title \
             else render.auto_title(streamer, opts.jeu, analyze.mood(words), n - 1, opts.titre_langue)
         link = url
         if plat == "twitch" and "/videos/" in url:
@@ -116,7 +118,8 @@ def clip_stream(url: str, opts) -> list[Path]:
         made.append(write_clip(opts, out_dir, base, section, layout, words, 1.0, dur, title, streamer,
                                {"source": url, "source_link": link, "debut_stream": t0, "score": m.score}))
     if not opts.garder:
-        (work / "audio.ogg").unlink(missing_ok=True)
+        for f in work.glob("audio_*.ogg"):
+            f.unlink(missing_ok=True)
     return made
 
 
@@ -131,7 +134,7 @@ def find_moments(url, inf, plat, work: Path, start, end, full, opts) -> list[Mom
                        d["lang"], d.get("cutscene", False)) for d in data]
     audio = source.get_audio(url, work, start, end, full)
     loud = analyze.loudness(audio)
-    rate = chat.for_vod(url, inf, start, start + len(loud), work, plat)
+    rate = None if getattr(opts, "sans_chat", False) else chat.for_vod(url, inf, start, start + len(loud), work, plat)
     log(f"son analysé ({hms(len(loud))})" + (" + chat" if rate is not None else ", sans chat"))
     score = analyze.hype(loud, rate)
     cands = analyze.peaks(score, k=max(opts.nb * 4, 8), min_gap=int(opts.duree * 1.5), margin=int(pre) + 2)
@@ -182,13 +185,20 @@ def redo(json_path: str, opts) -> Path:
     if opts.cam:
         L = facecam.detect(section, opts.cam)
     words = [Word(**w) for w in meta["words"]]
-    title = opts.titre.format(streamer=render.display_name(meta["streamer"]), jeu=opts.jeu.upper()) \
-        if opts.titre else meta["title"]
+    title = render.fill_title(opts.titre, meta["streamer"], opts.jeu) if opts.titre else meta["title"]
     out = Path(json_path).with_suffix(".mp4")
-    opts.titre_duree = opts.titre_duree if opts.titre_duree is not None else meta.get("titre_duree", 2.4)
-    render.render(section, out, L, words, meta["t_in"], meta["dur"], title, meta["streamer"],
-                  title_dur=opts.titre_duree, sep=meta.get("sep", 8))
-    meta.update({"title": title, "layout": L.to_dict(), "titre_duree": opts.titre_duree})
+    st = dict(meta.get("style", {}))  # on garde le style d'origine, sauf ce qui est redemandé
+    if opts.mots:
+        st["max_words"] = int(opts.mots)
+    if opts.surlignage:
+        st["highlight"] = opts.surlignage
+    if opts.sous_titres_y:
+        st["sub_y"] = opts.sous_titres_y
+    if opts.separateur:
+        st["sep"] = 8
+    render.render(section, out, L, words, meta["t_in"], meta["dur"], "" if opts.sans_titre else title,
+                  meta["streamer"], **st)
+    meta.update({"title": title, "layout": L.to_dict(), "style": st})
     Path(json_path).write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     txt = Path(json_path).with_suffix(".txt")
     if txt.exists():

@@ -1,12 +1,13 @@
-# Streameurs regardés par « python -m clipper trouver » (rediffusions), un pseudo Twitch par ligne.
+# Streameurs regardés par le mode auto (« python -m clipper auto »), un par ligne.
+# Pseudo Twitch tout seul, « kick:pseudo » pour Kick, ou un lien de chaîne YouTube.
 # Ajoute ou retire qui tu veux. Seules les rediffusions avec « GTA 6 » dans le titre sont gardées (--filtre).
 kaicenat
 xqc
 summit1g
 jynxzi
 caseoh_
+squeezie
+anyme023
+kick:jolavanille
 shroud
 lirik
-sodapoppin
-hasanabi
-moistcr1tikal

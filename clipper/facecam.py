@@ -287,7 +287,7 @@ def detect(video, forced_cam=None) -> Layout:
 
 def split_layout(W, H, box, face, conf=0.0) -> Layout:
     bx, by, bw, bh = box
-    top_h = even(min(900, max(720, OUT_W * bh / bw)))
+    top_h = even(min(740, max(620, OUT_W * bh / bw)))  # la webcam prend environ un tiers de la hauteur
     focus = (face[0] + face[2] / 2, face[1] + face[3] / 2)
     cam = crop_in(box, OUT_W / top_h, focus)
     game = game_crop(W, H, OUT_W / (OUT_H - top_h), box)

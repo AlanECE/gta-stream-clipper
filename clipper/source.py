@@ -13,9 +13,11 @@ AUDIO_FMT = "Audio_Only/bestaudio/worst"
 
 def normalize(target: str) -> str:
     """« kaicenat » → lien Twitch ; un lien ou un fichier reste tel quel"""
-    t = target.strip()
+    t = target.strip().split("#")[0]
     if Path(t).exists():
         return str(Path(t).resolve())
+    if t.lower().startswith("kick:"):  # « kick:jolavanille » → chaîne Kick
+        return f"https://kick.com/{t[5:].strip()}"
     if "://" not in t and "." not in t and "/" not in t:
         return f"https://www.twitch.tv/{t}"
     if not t.startswith("http"):
@@ -70,7 +72,7 @@ def media_urls(url: str, audio=False) -> list[str]:
 
 def get_audio(url: str, work: Path, start: float, end: float, full: bool) -> Path:
     """Audio seul de la rediffusion. Le t=0 du fichier correspond au temps `start` du stream."""
-    out = work / "audio.ogg"
+    out = work / f"audio_{int(start)}_{int(end)}.ogg"  # une plage = un fichier (sinon on relirait une autre plage)
     if out.exists() and out.stat().st_size > 10_000:
         return out
     if is_local(url):
@@ -144,11 +146,13 @@ def channel_vods(channel: str, n: int = 10) -> list[dict]:
         c = c.rstrip("/") + "/videos?filter=archives&sort=time"
     elif ("youtube.com/@" in c or "youtube.com/channel" in c) and "/streams" not in c:
         c = c.rstrip("/") + "/streams"
+    elif "kick.com" in c and "/videos" not in c:
+        c = c.rstrip("/") + "/videos"
     r = ytdlp("--flat-playlist", "--playlist-end", str(n), "-J", c)
     entries = json.loads(r.stdout).get("entries") or []
     out = []
     for e in entries:
-        u = e.get("url") or e.get("webpage_url") or ""
+        u = (e.get("url") or e.get("webpage_url") or "").split("#")[0]
         if u and not u.startswith("http"):
             u = f"https://www.youtube.com/watch?v={u}" if "youtube" in c else u
         out.append({"url": u, "title": e.get("title") or "", "duration": e.get("duration"),

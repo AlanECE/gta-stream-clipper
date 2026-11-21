@@ -11,8 +11,6 @@ from pathlib import Path
 
 PKG = Path(__file__).resolve().parent
 ASSETS = PKG / "assets"
-FONT_FILE = ASSETS / "fonts" / "LuckiestGuy-Regular.ttf"
-FONT_NAME = "Luckiest Guy"
 YUNET = ASSETS / "models" / "face_detection_yunet_2023mar.onnx"
 
 
