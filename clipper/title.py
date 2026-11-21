@@ -24,63 +24,128 @@ def _emoji_font_path() -> str | None:
 
 def is_emoji(ch: str) -> bool:
     o = ord(ch)
-    return o >= 0x1F000 or 0x2600 <= o <= 0x27BF or o in (0x2B50, 0x2B55, 0x203C, 0x2049)
+    return o >= 0x1F000 or 0x2600 <= o <= 0x27BF or o in (0x2B50, 0x2B55, 0x203C, 0x2049, 0x2122, 0x2139)
+
+
+def _is_regional(ch: str) -> bool:
+    return 0x1F1E6 <= ord(ch) <= 0x1F1FF
+
+
+def _is_skin(ch: str) -> bool:
+    return 0x1F3FB <= ord(ch) <= 0x1F3FF
 
 
 def _clean(text: str) -> str:
-    # sélecteurs de variante, liaisons et drapeaux (lettres régionales) : on les retire
-    return "".join(ch for ch in text if ord(ch) not in (0xFE0F, 0x200D) and not 0x1F1E6 <= ord(ch) <= 0x1F1FF)
+    return text.replace("​", "")
+
+
+def cache_dir() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".cache")
+    d = Path(base) / "gta-stream-clipper" / "emoji-apple"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+APPLE_CDN = "https://cdn.jsdelivr.net/npm/emoji-datasource-apple@15.1.2/img/apple/64/{}.png"
 
 
 class _Emoji:
+    """Emojis Apple (téléchargés une fois depuis le paquet public emoji-datasource-apple, puis gardés en cache ;
+    rien n'est fourni dans le dépôt). Sans connexion : la police d'emojis du système."""
+
     def __init__(self):
         self.path = _emoji_font_path()
-        self.cache: dict[tuple[str, int], Image.Image] = {}
+        self.cache: dict[tuple[str, int], Image.Image | None] = {}
 
-    def glyph(self, ch: str, h: int) -> Image.Image | None:
+    @property
+    def available(self) -> bool:
+        return True
+
+    def _apple(self, seq: str) -> Image.Image | None:
+        import urllib.request
+        names = ["-".join(f"{ord(c):x}" for c in seq)]
+        names.append("-".join(f"{ord(c):x}" for c in seq if ord(c) != 0xFE0F))
+        if "️" not in seq and len(seq) == 1:
+            names.append(f"{ord(seq):x}-fe0f")
+        for n in dict.fromkeys(names):
+            f = cache_dir() / f"{n}.png"
+            if not f.exists():
+                try:
+                    data = urllib.request.urlopen(APPLE_CDN.format(n), timeout=8).read()
+                    if data[:4] != b"\x89PNG":
+                        continue
+                    f.write_bytes(data)
+                except Exception:
+                    continue
+            try:
+                return Image.open(f).convert("RGBA")
+            except Exception:
+                continue
+        return None
+
+    def _system(self, seq: str) -> Image.Image | None:
         if not self.path:
             return None
-        key = (ch, h)
-        if key in self.cache:
-            return self.cache[key]
-        img = None
         for size in (109, 160, 96, 64, 137, 48):  # les polices bitmap n'acceptent que certaines tailles
             try:
                 f = ImageFont.truetype(self.path, size)
-                im = Image.new("RGBA", (size * 2, size * 2), (0, 0, 0, 0))
-                ImageDraw.Draw(im).text((size // 2, size // 2), ch, font=f, embedded_color=True)
+                im = Image.new("RGBA", (size * 3, size * 2), (0, 0, 0, 0))
+                ImageDraw.Draw(im).text((size // 2, size // 2), seq, font=f, embedded_color=True)
                 bb = im.getbbox()
                 if bb:
-                    im = im.crop(bb)
-                    img = im.resize((max(1, int(im.width * h / im.height)), h), Image.LANCZOS)
-                    break
+                    return im.crop(bb)
             except OSError:
                 continue
-        self.cache[key] = img
-        return img
+        return None
+
+    def glyph(self, seq: str, h: int) -> Image.Image | None:
+        key = (seq, h)
+        if key not in self.cache:
+            im = self._apple(seq) or self._system(seq)
+            self.cache[key] = im.resize((max(1, int(im.width * h / im.height)), h), Image.LANCZOS) if im else None
+        return self.cache[key]
 
 
 EMOJI = _Emoji()
 
 
 def _runs(text: str):
-    """découpe en morceaux texte / emoji"""
-    out, cur = [], ""
-    for ch in text:
-        if is_emoji(ch):
+    """découpe en morceaux texte / emoji (un emoji peut faire plusieurs caractères : drapeaux, teintes, ZWJ)"""
+    out, cur, i = [], "", 0
+    while i < len(text):
+        ch = text[i]
+        if is_emoji(ch) or _is_regional(ch):
             if cur:
                 out.append(("t", cur))
                 cur = ""
-            out.append(("e", ch))
+            seq = ch
+            i += 1
+            if _is_regional(ch) and i < len(text) and _is_regional(text[i]):
+                seq += text[i]
+                i += 1
+            while i < len(text):
+                c = text[i]
+                if c == "️" or _is_skin(c) or 0xE0020 <= ord(c) <= 0xE007F:
+                    seq += c
+                    i += 1
+                elif c == "‍" and i + 1 < len(text):
+                    seq += c + text[i + 1]
+                    i += 2
+                else:
+                    break
+            out.append(("e", seq))
+        elif ch == "️":
+            i += 1
         else:
             cur += ch
+            i += 1
     if cur:
         out.append(("t", cur))
     return out
 
 
 def _width(text: str, font, eh: int) -> float:
-    return sum(font.getlength(r) if k == "t" else (eh * 1.08 if EMOJI.path else 0) for k, r in _runs(text))
+    return sum(font.getlength(r) if k == "t" else eh * 1.08 for k, r in _runs(text))
 
 
 def _wrap(text: str, font, eh: int, max_w: float) -> list[str]:
@@ -111,8 +176,6 @@ def _wrap(text: str, font, eh: int, max_w: float) -> list[str]:
 def render_title(text: str, size: int = 52, max_w: int = 860) -> Image.Image:
     """le titre fini, au repos (RGBA)"""
     text = _clean(text).strip()
-    if not EMOJI.path:
-        text = "".join(ch for ch in text if not is_emoji(ch)).strip()
     S = size * SS
     font = ImageFont.truetype(str(TITLE_FONT), S)
     eh = int(S * 0.95)

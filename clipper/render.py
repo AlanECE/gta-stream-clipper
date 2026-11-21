@@ -16,7 +16,33 @@ from .util import ASSETS, log, run, video_info
 SUB_FONT_FILE = ASSETS / "fonts" / "Montserrat-ExtraBold.ttf"
 SUB_FONT_NAME = "Montserrat ExtraBold"
 WIN_RATIO = 1.562   # (usWinAscent + usWinDescent) / unitsPerEm de Montserrat : libass dimensionne la police là-dessus
-HIGHLIGHTS = {"violet": "7B2FF7", "rouge": "FF2D55", "vert": "1DB954", "bleu": "1E90FF", "orange": "FF8A00"}
+# styles de sous-titres : couleur du texte, couleur du mot dit, boîte derrière le mot dit (None = pas de boîte)
+STYLES = {
+    "jaune":          {"texte": "FFFFFF", "mot": "FFD200", "boite": None},
+    "tout-jaune":     {"texte": "FFD200", "mot": "FFD200", "boite": None},
+    "blanc":          {"texte": "FFFFFF", "mot": "FFFFFF", "boite": None},
+    "boite-jaune":    {"texte": "FFFFFF", "mot": "111111", "boite": "FFD200"},
+    "boite-violette": {"texte": "FFFFFF", "mot": "FFFFFF", "boite": "7B2FF7"},
+    "boite-rouge":    {"texte": "FFFFFF", "mot": "FFFFFF", "boite": "FF2D55"},
+    "boite-verte":    {"texte": "FFFFFF", "mot": "FFFFFF", "boite": "1DB954"},
+}
+DEFAULT_STYLE = "jaune"
+ALIASES = {"violet": "boite-violette", "rouge": "boite-rouge", "vert": "boite-verte", "bleu": "boite-violette",
+           "orange": "boite-jaune"}
+
+
+def style_spec(name: str | None) -> dict:
+    name = (name or DEFAULT_STYLE).strip().lower()
+    name = ALIASES.get(name, name)
+    if name in STYLES:
+        return STYLES[name]
+    if re.fullmatch(r"#?[0-9a-fA-F]{6}", name):  # une couleur à soi : boîte de cette couleur
+        return {"texte": "FFFFFF", "mot": "FFFFFF", "boite": name.lstrip("#").upper()}
+    return STYLES[DEFAULT_STYLE]
+
+
+def _ass(hex6: str) -> str:
+    return f"&H00{hex6[4:6]}{hex6[2:4]}{hex6[0:2]}&"
 
 TITRES = {
     "fr": {"rire": ["{s} est mort de rire sur {j} 😭", "{s} pleure de rire sur {j} 😂"],
@@ -57,7 +83,21 @@ def clean_word(w: str) -> str:
     return w.strip("-")
 
 
+def merge_elisions(words: list[Word]) -> list[Word]:
+    """Whisper coupe « c'est » en « c' » + « est » (ou « c » + « 'est ») : on recolle"""
+    out: list[Word] = []
+    for w in words:
+        t = w.text.strip().replace("’", "'")
+        if out and (t.startswith("'") or out[-1].text.endswith("'")):
+            p = out[-1]
+            out[-1] = Word(p.start, w.end, p.text + t)
+        else:
+            out.append(Word(w.start, w.end, t))
+    return out
+
+
 def groups(words: list[Word], max_words=2, max_chars=16) -> list[list[Word]]:
+    words = merge_elisions(words)
     out, cur = [], []
     for i, w in enumerate(words):
         txt = clean_word(w.text)
@@ -87,18 +127,16 @@ def _rrect(w: float, h: float, r: float) -> str:
 
 
 def build_ass(path: Path, words: list[Word], clip_dur: float, y: int, max_words: int = 2,
-              highlight: str = "violet", em: int = 60):
+              highlight: str = DEFAULT_STYLE, em: int = 60):
     F = int(round(em * WIN_RATIO))
     font = ImageFont.truetype(str(SUB_FONT_FILE), em)
     space = font.getlength(" ")
     cap = em * 0.70
     padx, pady = em * 0.22, em * 0.26
     box_h = cap + 2 * pady
-    color = HIGHLIGHTS.get(highlight)
-    if color is None and re.fullmatch(r"#?[0-9a-fA-F]{6}", highlight or ""):
-        color = highlight.lstrip("#")
-    ass_box = f"&H00{color[4:6]}{color[2:4]}{color[0:2]}&" if color else None
-    yellow = "&H0000D2FF&"
+    spec = style_spec(highlight)
+    ass_box = _ass(spec["boite"]) if spec["boite"] else None
+    c_text, c_word = _ass(spec["texte"]), _ass(spec["mot"])
     head = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {OUT_W}
@@ -138,11 +176,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 if active and ass_box:
                     ev.append(f"Dialogue: 1,{_ts(st)},{_ts(en)},Boite,,0,0,0,,{{{tags}\\1c{ass_box}\\p1{pop}}}"
                               f"{_rrect(widths[j] + 2 * padx, box_h, box_h * 0.3)}{{\\p0}}")
-                    ev.append(f"Dialogue: 2,{_ts(st)},{_ts(en)},Mot,,0,0,0,,{{{tags}\\bord3\\shad0{pop}}}{x2.text}")
+                    bord = "\\bord0" if spec["mot"] == "111111" else "\\bord3"
+                    ev.append(f"Dialogue: 2,{_ts(st)},{_ts(en)},Mot,,0,0,0,,{{{tags}\\1c{c_word}{bord}\\shad0{pop}}}"
+                              f"{x2.text}")
                 elif active:
-                    ev.append(f"Dialogue: 2,{_ts(st)},{_ts(en)},Mot,,0,0,0,,{{{tags}\\1c{yellow}{pop}}}{x2.text}")
+                    ev.append(f"Dialogue: 2,{_ts(st)},{_ts(en)},Mot,,0,0,0,,{{{tags}\\1c{c_word}{pop}}}{x2.text}")
                 else:
-                    ev.append(f"Dialogue: 2,{_ts(st)},{_ts(en)},Mot,,0,0,0,,{{{tags}}}{x2.text}")
+                    ev.append(f"Dialogue: 2,{_ts(st)},{_ts(en)},Mot,,0,0,0,,{{{tags}\\1c{c_text}}}{x2.text}")
     path.write_text(head + "\n".join(ev) + "\n", encoding="utf-8")
 
 
@@ -184,7 +224,7 @@ def filter_graph(L: Layout, sep: int, title_xy: tuple[int, int] | None) -> str:
 
 
 def render(section: Path, out: Path, layout: Layout, words: list[Word], t_in: float, dur: float,
-           title: str, streamer: str = "", sep: int = 0, max_words: int = 2, highlight: str = "violet",
+           title: str, streamer: str = "", sep: int = 0, max_words: int = 2, highlight: str = DEFAULT_STYLE,
            sub_y: float | None = None, fps_max: float = 60.0):
     """`section` : extrait source ; le clip commence à `t_in` dans la section et dure `dur`.
     `words` : temps déjà ramenés au début du clip."""

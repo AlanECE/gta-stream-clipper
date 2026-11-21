@@ -1,8 +1,7 @@
 # GTA Stream Clipper
 
-**Des streams GTA aux clips verticaux prêts à poster.** Deux modes : tu donnes le lien d'une rediffusion Twitch ou
-Kick, ou il va chercher tout seul les dernières rediffusions GTA 6. Il trouve les moments où le streameur s'emballe et
-sort des clips 1080x1920 :
+**Des streams GTA aux clips verticaux prêts à poster.** Il va chercher les moments qui ont déjà fait le buzz sur
+Twitch, ou il écoute une rediffusion (Twitch, Kick) ou un live, et sort des clips 1080x1920 :
 
 ```
 ┌──────────────────────────┐
@@ -10,35 +9,55 @@ sort des clips 1080x1920 :
 │   WEBCAM DU STREAMEUR    │   ← un tiers de la hauteur, recadrée sur lui
 │                          │
 │ ╭──────────────────────╮ │
-├─│ Kai Cenat est bloqué │─┤   ← le titre, façon texte TikTok (boîte blanche, emojis),
+├─│ Kai Cenat est bloqué │─┤   ← le titre façon TikTok (boîte blanche, emojis Apple),
 │ │    sur GTA 6 😭      │ │     posé sur la jonction, du début à la fin
 │ ╰──────────────────────╯ │
 │                          │
 │         GAMEPLAY         │   ← le jeu, sans la webcam ni le chat
 │                          │
-│       OH [MY]            │   ← sous-titres deux mots par deux mots,
-│                          │     le mot prononcé surligné
+│        OH  MY            │   ← sous-titres deux mots par deux mots,
+│                          │     le mot prononcé en jaune
 └──────────────────────────┘
 ```
 
-Un outil Python et un skill pour [Claude Code](https://claude.com/claude-code), créé par
-[Alan (iAlan)](https://github.com/AlanECE). Gratuit, open source (MIT). Tout tourne sur ton PC : pas de compte,
-pas de clé d'API obligatoire, pas d'abonnement.
+Une application (Windows), un outil en ligne de commande et un skill pour [Claude Code](https://claude.com/claude-code),
+créés par [Alan (iAlan)](https://github.com/AlanECE). Gratuit, open source (MIT). **Aucune clé d'API**, ni d'IA ni de
+Twitch : tout tourne sur ton PC (ou ton serveur).
 
-- **Mode 1, un lien** : une rediffusion Twitch ou Kick (YouTube marche aussi) → les meilleurs moments en clips.
-- **Mode 2, auto** : il va chercher les dernières rediffusions GTA 6 des streameurs de `streamers.txt` (ou les plus
-  gros lives du moment) et les clippe.
-- **Live** : il enregistre le stream en direct et sort un clip environ 1 minute après chaque moment fort.
+## Ce qu'il sait faire
+
+- **🔥 Clips viraux** : les clips les plus vus sur Twitch (24 h, 7 jours, 30 jours), filtrés par langue ou par
+  streameur. Tu regardes le clip, tu cliques : il remonte le moment depuis la rediffusion, quelques secondes avant et
+  après, au format vertical.
+- **🔗 Depuis un lien** : une rediffusion Twitch ou Kick (YouTube marche aussi). Il écoute le stream, repère les moments
+  où le streameur s'emballe et te les propose, avec ce qu'il dit.
+- **🔴 En direct** : les lives GTA du moment (filtrés par langue). Tu en choisis un, il le regarde et sort un clip
+  environ une minute après chaque moment fort. Sur un serveur, il peut rester branché sur les lives jour et nuit.
+- **📚 Bibliothèque** : tous tes clips. Aperçu, titre, sous-titres et style modifiables, puis téléchargement en MP4.
 
 ## Installation
 
-### Dans Claude Code (le plus simple)
+### L'application Windows (le plus simple)
+
+1. Télécharge **[GTA-Stream-Clipper-Windows.zip](https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Windows.zip)**
+   et décompresse-le.
+2. Double-clique sur **`GTA-Stream-Clipper.exe`** : l'interface s'ouvre dans ton navigateur. La fenêtre noire montre
+   ce que fait l'outil ; la fermer arrête tout.
+3. Tes clips sont rangés dans `Vidéos\GTA Stream Clipper`.
+
+Au premier clip, le modèle de transcription se télécharge (0,5 Go). L'application transcrit sur le processeur ; pour
+utiliser ta carte NVIDIA (bien plus rapide), installe la version Python ci-dessous.
+
+Windows peut afficher « Windows a protégé votre ordinateur » (l'exécutable n'est pas signé) : clique sur
+« Informations complémentaires », puis « Exécuter quand même ».
+
+### Avec Claude Code
 
 Colle ce message dans Claude Code :
 
 ```text
 Installe GTA Stream Clipper depuis https://github.com/AlanECE/gta-stream-clipper :
-clone le dépôt dans ~/gta-stream-clipper, installe FFmpeg s'il manque
+clone le dépôt dans mon dossier personnel, installe FFmpeg s'il manque
 (Windows : winget install Gyan.FFmpeg ; Mac : brew install ffmpeg),
 puis lance pip install -r requirements.txt dans le dossier.
 Si j'ai une carte NVIDIA, installe aussi nvidia-cublas-cu12 et nvidia-cudnn-cu12==9.*.
@@ -46,13 +65,14 @@ Copie le dossier skills/gta-stream-clipper dans ~/.claude/skills/.
 Vérifie avec python -m clipper --help et dis-moi si c'est prêt.
 ```
 
-Ensuite, dis simplement à Claude : **« clippe ce stream <lien> »**, **« fais-moi 3 clips du dernier stream GTA 6 de
-kaicenat »**, **« trouve les plus gros streams GTA 6 d'aujourd'hui et clippe-les »** ou **« clippe le live de
-summit1g pendant une heure »**.
+Ensuite : **« ouvre l'interface de GTA Stream Clipper »**, **« trouve les clips GTA 6 français les plus vus
+aujourd'hui et monte les 3 meilleurs »**, **« clippe ce stream <lien> »** ou **« surveille le live de domingo
+pendant une heure »**.
 
 ### À la main
 
-Il faut **Python 3.10 ou plus** et **FFmpeg**.
+Il faut **Python 3.10 ou plus** et **FFmpeg** (`winget install Gyan.FFmpeg`, `brew install ffmpeg` ou
+`sudo apt install ffmpeg`).
 
 ```bash
 git clone https://github.com/AlanECE/gta-stream-clipper.git
@@ -60,126 +80,119 @@ cd gta-stream-clipper
 pip install -r requirements.txt
 # carte NVIDIA (transcription bien plus rapide), optionnel :
 pip install nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"
+python -m clipper app      # l'interface dans le navigateur
 ```
 
-FFmpeg : `winget install Gyan.FFmpeg` sur Windows, `brew install ffmpeg` sur Mac, `sudo apt install ffmpeg` sur
-Linux. Rouvre ton terminal après l'installation.
-
-Au premier clip, le modèle de transcription Whisper se télécharge tout seul (`large-v3-turbo`, 1,6 Go, avec une
-carte NVIDIA ; sinon `small`, 0,5 Go, sur le processeur).
-
-## Utilisation
+## En ligne de commande
 
 Toutes les commandes se lancent depuis le dossier du dépôt. Les clips arrivent dans `./clips/` : pour chacun, un
 `.mp4`, un `.txt` (titre, légende avec hashtags, lien vers le moment dans le stream, ce que dit le streameur) et un
 `.json` (pour le refaire).
 
 ```bash
-# MODE 1 : un lien de rediffusion (Twitch, Kick, YouTube)
-python -m clipper lien https://www.twitch.tv/videos/2935613960
-python -m clipper lien https://kick.com/jolavanille/videos/01a1fac1-1fb8-7180-a932-3e0fc369766e --de 3:20:00 --a 4:05:00
+# l'interface graphique
+python -m clipper app
 
-# MODE 2 : il cherche tout seul
-python -m clipper auto --liste               # juste la liste des rediffusions GTA 6 trouvées
-python -m clipper auto --streams 2           # clipper les 2 premières
-python -m clipper chaine kaicenat --videos 2 # les 2 dernières rediffusions GTA d'un streameur Twitch
-python -m clipper chaine kick:jolavanille    # pareil sur Kick
-python -m clipper auto --live --streams 1    # le plus gros live GTA 6 du moment
+# les clips viraux : liste, puis montage
+python -m clipper viral --langue-clips fr --liste             # les clips GTA 6 français les plus vus (24 h)
+python -m clipper viral --langue-clips fr --choix 1,4         # monter le 1er et le 4e
+python -m clipper viral --chaine kaicenat --periode semaine --nb 3
 
-# un live : il écoute pendant 2 heures et sort les clips au fil de l'eau (Ctrl+C pour arrêter)
-python -m clipper live kaicenat --minutes 120
+# un lien de rediffusion (Twitch, Kick, YouTube)
+python -m clipper lien https://www.twitch.tv/videos/2935613960 --de 3:00:00 --a 3:45:00 --analyse
+python -m clipper lien https://www.twitch.tv/videos/2935613960 --de 3:00:00 --a 3:45:00 --choix 1 --titres "Kai Cenat est bloqué sur GTA 6 😭"
 
-# une vidéo déjà sur ton disque
-python -m clipper fichier mon_stream.mp4 --streamer KaiCenat
+# il cherche tout seul les dernières rediffusions GTA 6 (streamers.txt)
+python -m clipper auto --liste
+python -m clipper chaine kick:jolavanille
 
-# refaire un clip : autre titre, mot par mot, surlignage jaune
-python -m clipper refaire clips/kaicenat_20261121_11459.json --titre "{streamer} panique sur {jeu} 😭" --mots 1 --surlignage jaune
+# un live : il écoute et sort les clips au fil de l'eau (Ctrl+C pour arrêter)
+python -m clipper live domingo --minutes 120
+
+# refaire un clip : autre titre, mot par mot, autre style
+python -m clipper refaire clips/<clip>.json --titre "{streamer} panique sur {jeu} 😱" --mots 1 --style boite-violette
 ```
-
-### Choisir soi-même les moments
-
-L'outil classe les moments tout seul, mais tu peux (ou Claude peut) regarder la liste et choisir :
-
-```bash
-python -m clipper lien <lien> --analyse
-#   1. 3:10:59 · score 2.15 · « Oh my god, this is just a check. This is crazy. How am I supposed to move? … »
-#   2. 3:42:26 · score 2.09 · « … »
-python -m clipper lien <lien> --choix 1,4 --titres "Kai Cenat est bloqué sur GTA 6 😭|Kai Cenat n'y croit pas 💀"
-```
-
-La deuxième commande réutilise l'analyse de la première : elle ne retélécharge rien.
 
 ### Options utiles
 
 | Option | Rôle | Par défaut |
 |---|---|---|
-| `--nb` | nombre de clips | 3 |
-| `--duree` | durée visée d'un clip, en secondes | 30 |
-| `--de`, `--a` | plage du stream à analyser (`1:30:00`) | tout (10 h au plus) |
+| `--style` | sous-titres : `jaune` (mot dit en jaune), `tout-jaune`, `blanc`, `boite-jaune`, `boite-violette`, `boite-rouge`, `boite-verte`, ou `#RRGGBB` | `jaune` |
+| `--mots` | mots affichés à la fois : 1 (mot par mot), 2 ou 3 | 2 |
 | `--titre` | titre imposé ; `{streamer}` et `{jeu}` sont remplacés, emojis acceptés | automatique |
 | `--titre-langue` | langue des titres automatiques (`fr` ou `en`) | `fr` |
 | `--sans-titre` | pas de titre sur la vidéo | |
 | `--jeu` | nom du jeu dans le titre | `GTA 6` |
-| `--mots` | sous-titres : 1 (mot par mot), 2 ou 3 mots à la fois | 2 |
-| `--surlignage` | derrière le mot dit : `violet`, `rouge`, `vert`, `bleu`, `orange`, un code `#RRGGBB`, ou `jaune` (mot en jaune, sans boîte) | `violet` |
-| `--sous-titres-y` | hauteur des sous-titres, de 0 (haut) à 1 (bas) | 0.68 |
+| `--nb`, `--duree` | nombre de clips, durée visée d'un clip (secondes) | 3, 30 |
+| `--de`, `--a` | plage du stream à analyser (`1:30:00`) | tout (10 h au plus) |
 | `--langue` | langue parlée par le streameur (`en`, `fr`…) | détectée |
 | `--sans-chat` | ne pas regarder le chat (le son et les paroles suffisent) | |
 | `--cam x,y,l,h` | cadre de la webcam à la main, si la détection se trompe | automatique |
 | `--separateur` | une bande jaune entre webcam et gameplay | |
-| `--seuil` | score minimum d'un moment (le live s'en sert pour décider) | 1.0 |
-| `--sortie` | dossier des clips | `clips` |
+
+## Sur un serveur : toujours branché sur les lives
+
+Sur un serveur Linux (VPS), l'outil tourne même PC éteint. L'interface est la même, dans ton navigateur, protégée
+par un mot de passe :
+
+```bash
+sudo apt install -y ffmpeg python3-pip git tmux
+git clone https://github.com/AlanECE/gta-stream-clipper.git && cd gta-stream-clipper
+pip install -r requirements.txt
+tmux new -s clipper
+python3 -m clipper app --host 0.0.0.0 --port 8765 --mot-de-passe "un-mot-de-passe-solide" --sans-navigateur
+```
+
+Ouvre `http://<ip-du-serveur>:8765` (utilisateur `clipper`), lance la surveillance des lives depuis l'onglet
+« En direct » : les clips arrivent dans la bibliothèque, tu les modifies et les télécharges depuis n'importe où.
+`tmux` garde l'outil ouvert quand tu te déconnectes (`Ctrl+B` puis `D` ; `tmux attach -t clipper` pour revenir).
+Sans carte graphique, la transcription tourne sur le processeur : prends au moins 4 cœurs pour suivre un live.
+Pour un vrai nom de domaine en HTTPS, mets un proxy (Caddy, Nginx) devant le port 8765.
 
 ## Comment ça marche
 
-| Étape | Rediffusion | Live |
-|---|---|---|
-| 1. Récupérer le stream | l'audio seul (rapide), puis seulement les minutes des clips | des morceaux de 20 s, on garde les 15 dernières minutes |
-| 2. Mesurer la hype | volume de sa voix par rapport à son niveau normal (+ vitesse du chat Twitch ou YouTube, en bonus) | pareil, chat Twitch en direct |
-| 3. Écouter les candidats | Whisper transcrit chaque moment ; les mots de réaction (« bro », « chat », « no way », « oh my god »…) font monter le score | pareil |
-| 4. Écarter les cinématiques | les bandes noires des cinématiques de GTA font baisser le score (les paroles sont celles du jeu, pas du streameur) | |
-| 5. Trouver la webcam | un visage qui ne bouge pas pendant que le jeu bouge, et les bordures nettes autour de lui (le même cadre pour tout le stream) | pareil |
-| 6. Fabriquer le clip | webcam en haut (un tiers), gameplay en bas, titre en boîte blanche façon TikTok sur la jonction, sous-titres 2 par 2 avec le mot dit surligné (police Montserrat), son normalisé à -14 LUFS | pareil |
+| Étape | Ce qu'il fait |
+|---|---|
+| Clips viraux | l'accès public du site Twitch (le même que yt-dlp) donne les clips les plus vus, avec la seconde exacte dans la rediffusion |
+| Moments d'un stream | le volume de sa voix par rapport à son niveau normal (+ la vitesse du chat Twitch ou YouTube, en bonus) |
+| Paroles | Whisper (faster-whisper) transcrit chaque moment sur ton ordinateur ; les mots de réaction (« bro », « chat », « oh my god »…) font monter le score |
+| Cinématiques | les bandes noires des scènes du jeu font baisser le score (les paroles sont celles des personnages) |
+| Webcam | un visage qui ne bouge pas pendant que le jeu bouge, et les bordures nettes autour de lui (le même cadre pour tout le stream) |
+| Clip | webcam en haut (un tiers), jeu en bas, titre en boîte blanche sur la jonction, sous-titres mot à mot, son normalisé à -14 LUFS |
 
-Le chat est **compté, jamais lu** : seul le nombre de messages par seconde sert. Sur les rediffusions Twitch, l'outil
-passe par l'API publique du lecteur Twitch ; sur YouTube, par le chat du replay ; en live Twitch, par une connexion
-anonyme au chat (sans compte).
-
-S'il n'y a pas de webcam, le jeu est posé au centre sur un fond flouté. Si le streameur est en plein écran (pas de
-jeu), l'image est recadrée sur lui.
-
-## Trouver des streams
-
-Le mode `auto` fonctionne sans rien configurer :
-
-- **en live**, il cherche les lives GTA 6 en cours sur YouTube ;
-- **en rediffusion**, il regarde les dernières rediffusions des streameurs listés dans [`streamers.txt`](streamers.txt)
-  (Twitch, `kick:pseudo` pour Kick ; ajoute ou retire qui tu veux) et garde celles qui ont « GTA 6 » dans le titre.
-
-Pour chercher aussi sur Twitch (les plus gros lives de la catégorie Grand Theft Auto VI), crée une application
-gratuite sur [dev.twitch.tv/console](https://dev.twitch.tv/console), puis copie `.env.example` en `.env` et
-remplis `TWITCH_CLIENT_ID` et `TWITCH_CLIENT_SECRET`.
+Le chat est **compté, jamais lu**. S'il n'y a pas de webcam, le jeu est posé au centre sur un fond flouté ; si le
+streameur est en plein écran, l'image est recadrée sur lui.
 
 ## Bon à savoir
 
-- **Clippe seulement des streameurs d'accord pour être clippés**, et regarde chaque clip avant de le poster.
-  Beaucoup de streameurs ont un programme de clippeurs ; renseigne-toi avant.
-- La détection des moments se trompe parfois (une scène du jeu très bruyante, un dialogue de mission). Le plus
-  fiable : `--analyse`, puis `--choix`, ou laisser Claude choisir avec le skill.
-- Les streams réservés aux abonnés ou supprimés ne peuvent pas être téléchargés.
-- Les extraits sources restent dans `clips/.travail/` pour pouvoir refaire un clip ; supprime ce dossier quand tu
-  as fini.
-- Pour la monétisation sur YouTube, le contenu repris tel quel est souvent refusé : ajoute quelque chose à toi.
+- **Clippe seulement des streameurs d'accord pour être clippés**, et regarde chaque clip avant de le poster. Beaucoup
+  de streameurs ont un programme de clippeurs ; renseigne-toi avant.
+- La détection des moments d'un stream se trompe parfois (une scène du jeu très bruyante, un dialogue de mission) :
+  regarde la liste avant de monter. Les clips viraux, eux, ont déjà été choisis par les viewers.
+- Les streams réservés aux abonnés ne se téléchargent pas. Si une rediffusion a été supprimée, un clip viral est remonté
+  à partir du clip Twitch lui-même.
+- Les extraits sources restent dans le dossier `.travail` des clips pour pouvoir les modifier ; supprime-le quand tu as
+  fini.
+
+## Construire l'exécutable
+
+```bash
+pip install pyinstaller
+python build_exe.py       # → dist/GTA-Stream-Clipper/ et dist/GTA-Stream-Clipper-Windows.zip
+```
 
 ## Crédits et licences
 
 GTA Stream Clipper est sous licence [MIT](LICENSE). Il repose sur [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-(Unlicense), [FFmpeg](https://ffmpeg.org/) (LGPL/GPL), [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+(Unlicense), [FFmpeg](https://ffmpeg.org/) (l'application Windows embarque la version « essentials » de
+[gyan.dev](https://www.gyan.dev/ffmpeg/builds/), GPL), [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
 (MIT) et le modèle [Whisper](https://github.com/openai/whisper) d'OpenAI (MIT), [OpenCV](https://opencv.org/)
 (Apache 2.0) et son détecteur de visages [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)
-(MIT, fourni dans `clipper/assets/models`), [Pillow](https://python-pillow.org/) (MIT-CMU), et la police
-[Montserrat](https://github.com/JulietaUla/Montserrat) (SIL OFL 1.1, fournie dans `clipper/assets/fonts`).
+(MIT, fourni dans `clipper/assets/models`), [Pillow](https://python-pillow.org/) (MIT-CMU) et la police
+[Montserrat](https://github.com/JulietaUla/Montserrat) (SIL OFL 1.1). Les emojis Apple sont téléchargés au besoin
+depuis le paquet public [emoji-datasource-apple](https://github.com/iamcal/emoji-data) et restent la propriété
+d'Apple ; ils ne sont pas fournis dans ce dépôt.
 
 L'idée vient de [gta6-clipper](https://github.com/vossashtonai/gta6-clipper) d'Ashton Voss (MIT). Le code est écrit de
-zéro, pour Windows comme pour Mac et Linux, avec une autre mise en page. GTA Stream Clipper n'est affilié ni à
-Rockstar Games, ni à Twitch, ni à YouTube, ni aux streameurs cités en exemple.
+zéro. GTA Stream Clipper n'est affilié ni à Rockstar Games, ni à Twitch, ni à Kick, ni à YouTube, ni aux streameurs
+cités en exemple.

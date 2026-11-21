@@ -14,8 +14,20 @@ ASSETS = PKG / "assets"
 YUNET = ASSETS / "models" / "face_detection_yunet_2023mar.onnx"
 
 
+import threading
+
+_tls = threading.local()  # l'interface graphique y range la tâche en cours pour en afficher le journal
+
+
 def log(*parts):
-    print("»", *parts, flush=True)
+    msg = " ".join(str(p) for p in parts)
+    try:
+        print("»", msg, flush=True)
+    except Exception:
+        pass
+    job = getattr(_tls, "job", None)
+    if job is not None:
+        job.lines.append(msg)
 
 
 def need(*tools):

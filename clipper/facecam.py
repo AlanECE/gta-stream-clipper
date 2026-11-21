@@ -279,6 +279,9 @@ def detect(video, forced_cam=None) -> Layout:
             return Layout("plein", W, H, cam=(even(x0), 0, even(cw), even(H)), seam_y=1380)
         box = calm_box(frames, face) or face_box(face, W, H)
         box, conf = refine(frames, box, face)
+        if conf < 2.85:  # pas de vraie bordure autour du visage : c'est un personnage du jeu, pas une webcam
+            log(f"visage sans cadre de webcam autour (confiance {conf:.1f}) : le jeu au centre, fond flouté")
+            return Layout("jeu", W, H, seam_y=1420)
     L = split_layout(W, H, box, face, conf)
     log(f"webcam trouvée : {int(box[2])}x{int(box[3])} à ({int(box[0])}, {int(box[1])}) → haut {L.top_h} px, "
         f"jeu {OUT_H - L.top_h} px")

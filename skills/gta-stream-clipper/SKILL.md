@@ -1,6 +1,6 @@
 ---
 name: gta-stream-clipper
-description: Transforme des streams GTA (Twitch, Kick, YouTube) en clips verticaux prêts à poster - webcam du streameur en haut (un tiers), gameplay en bas, titre façon texte TikTok (boîte blanche, emojis) posé sur la jonction, sous-titres deux mots par deux mots avec le mot dit surligné. Deux modes - un lien de rediffusion, ou il va chercher tout seul les dernières rediffusions GTA 6 - plus le live. Utiliser dès que l'utilisateur dit « clippe ce stream », « fais des clips de <streamer> », « clip le live de », « trouve les streams GTA », « fais-moi des clips GTA 6 », ou donne un lien Twitch/Kick/YouTube de stream à découper en clips.
+description: Transforme des streams GTA (Twitch, Kick, YouTube) en clips verticaux prêts à poster - webcam du streameur en haut (un tiers), gameplay en bas, titre façon texte TikTok (boîte blanche, emojis Apple) posé sur la jonction, sous-titres deux mots par deux mots avec le mot dit en jaune. Clips viraux Twitch (les plus vus, par langue ou streameur, sans clé), lien de rediffusion, recherche automatique des rediffusions GTA 6, live, et une interface graphique (python -m clipper app). Utiliser dès que l'utilisateur dit « clippe ce stream », « fais des clips de <streamer> », « clip le live de », « trouve les streams GTA », « fais-moi des clips GTA 6 », ou donne un lien Twitch/Kick/YouTube de stream à découper en clips.
 ---
 
 # GTA Stream Clipper
@@ -11,6 +11,21 @@ L'outil est un module Python : `python -m clipper …`, lancé **depuis le dossi
 
 Si `python -m clipper --help` échoue : `pip install -r requirements.txt` dans le dépôt, et FFmpeg
 (`winget install Gyan.FFmpeg` sur Windows, `brew install ffmpeg` sur Mac).
+
+## L'interface graphique
+
+`python -m clipper app` ouvre l'interface dans le navigateur (clips viraux, lien, en direct, bibliothèque avec
+aperçu, modification du titre, des sous-titres et du style, téléchargement). Si l'utilisateur veut cliquer plutôt
+que discuter, lance-la (en arrière-plan) et donne-lui l'adresse affichée.
+
+## Clips viraux (le plus simple et le plus fiable)
+
+```bash
+python -m clipper viral --langue-clips fr --liste [--periode jour|semaine|mois] [--chaine <pseudo>]
+python -m clipper viral --langue-clips fr --choix 1,3 --titres "Titre 1 😭|Titre 2 💀"
+```
+Les viewers ont déjà choisi ces moments. Lis les titres des clips (souvent courts ou en argot), choisis ceux qui
+parlent de GTA, écris un titre français façon TikTok par clip (`--titres` dans l'ordre de `--choix`).
 
 ## Mode 1 (un lien) : toujours en deux temps, c'est toi qui choisis
 
@@ -56,13 +71,15 @@ devant une vraie réaction. Ton travail, c'est de choisir.
 
 ## Live
 
-`python -m clipper live <pseudo ou lien> --minutes 60`. Ça tourne longtemps : lance-le en arrière-plan et préviens
+`python -m clipper live <pseudo ou lien> --minutes 60` (les lives GTA du moment, par langue, sont dans l'onglet
+« En direct » de l'interface). Sur un serveur : `python -m clipper app --host 0.0.0.0 --mot-de-passe <mdp> --sans-navigateur`
+dans tmux, puis l'utilisateur lance les surveillances depuis son navigateur. Ça tourne longtemps : lance-le en arrière-plan et préviens
 l'utilisateur qu'un clip sort ~1 minute après chaque moment fort. Pas de choix manuel ici : `--seuil 1.3` pour être
 plus exigeant, `--seuil 0.8` pour plus de clips.
 
 ## Réglages du rendu
 
-`--mots 1` (mot par mot ; défaut 2 par 2), `--surlignage violet|rouge|vert|bleu|orange|#RRGGBB|jaune`,
+`--mots 1` (mot par mot ; défaut 2 par 2), `--style jaune|tout-jaune|blanc|boite-jaune|boite-violette|boite-rouge|boite-verte|#RRGGBB` (défaut jaune),
 `--sous-titres-y 0.68`, `--separateur` (bande jaune entre webcam et jeu), `--sans-titre`, `--titre` (un titre pour
 tous ; `{streamer}` et `{jeu}` remplacés), `--titre-langue en`, `--jeu "GTA 5"`, `--langue fr`, `--sans-chat`,
 `--nb`, `--duree`. `refaire <clip.json>` accepte les mêmes réglages.

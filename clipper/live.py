@@ -99,8 +99,14 @@ def clip_live(url: str, opts, inf: dict | None = None) -> list[Path]:
     stop_at = time.monotonic() + opts.minutes * 60
     n = 0
     try:
+        stop_event = getattr(opts, "stop_event", None)  # l'interface graphique peut arrêter l'écoute
         while time.monotonic() < stop_at:
-            time.sleep(10)
+            if stop_event is not None:
+                if stop_event.wait(10):
+                    log("arrêt demandé")
+                    break
+            else:
+                time.sleep(10)
             if not rec.alive():
                 try:
                     if not source.info(url).get("is_live"):

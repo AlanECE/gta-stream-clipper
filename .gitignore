@@ -7,3 +7,6 @@ venv/
 *.mp4
 *.wav
 *.ogg
+dist/
+build/
+*.spec

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GTA Stream Clipper</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="logo">▶</span> GTA Stream Clipper <span id="version" class="muted"></span></div>
+  <nav>
+    <button data-tab="viral" class="on">🔥 Clips viraux</button>
+    <button data-tab="lien">🔗 Depuis un lien</button>
+    <button data-tab="live">🔴 En direct</button>
+    <button data-tab="biblio">📚 Bibliothèque <span id="nbClips" class="badge"></span></button>
+  </nav>
+</header>
+
+<main>
+  <!-- CLIPS VIRAUX -->
+  <section id="tab-viral" class="tab on">
+    <h1>Les moments qui ont déjà fait le buzz</h1>
+    <p class="lead">Les clips les plus vus sur Twitch. Clique sur un clip pour le voir, puis crée sa version verticale.</p>
+    <div class="filters">
+      <label>Période <select id="vPeriode"><option value="jour">24 heures</option><option value="semaine">7 jours</option><option value="mois">30 jours</option><option value="tout">depuis toujours</option></select></label>
+      <label>Langue <select id="vLangue" class="langs"></select></label>
+      <label>Streameur <input id="vChaine" placeholder="tous (ou un pseudo Twitch)"></label>
+      <label>Jeu <input id="vJeu" value="Grand Theft Auto VI"></label>
+      <button id="vGo" class="primary">Rechercher</button>
+    </div>
+    <div id="vRes" class="grid"></div>
+  </section>
+
+  <!-- LIEN -->
+  <section id="tab-lien" class="tab">
+    <h1>Depuis un lien</h1>
+    <p class="lead">Une rediffusion Twitch ou Kick (YouTube marche aussi). L'outil écoute le stream, repère les moments forts et te les propose.</p>
+    <div class="filters">
+      <label class="grow">Lien <input id="lUrl" placeholder="https://www.twitch.tv/videos/… ou https://kick.com/…/videos/…"></label>
+      <label>De <input id="lDe" placeholder="1:00:00" size="8"></label>
+      <label>À <input id="lA" placeholder="2:00:00" size="8"></label>
+      <label>Il parle <select id="lLangue" class="langs"></select></label>
+      <button id="lGo" class="primary">Analyser</button>
+    </div>
+    <p class="hint">Sur un stream de plusieurs heures, donne une plage d'une heure environ où il joue vraiment : c'est plus rapide.</p>
+    <div id="lRes"></div>
+  </section>
+
+  <!-- LIVE -->
+  <section id="tab-live" class="tab">
+    <h1>En direct</h1>
+    <p class="lead">Choisis un live : l'outil le regarde et sort un clip environ une minute après chaque moment fort. Les clips arrivent dans la bibliothèque.</p>
+    <div class="filters">
+      <label>Langue <select id="dLangue" class="langs"></select></label>
+      <label>Jeu <input id="dJeu" value="Grand Theft Auto VI"></label>
+      <button id="dGo" class="primary">Voir les lives</button>
+      <span class="sep"></span>
+      <label class="grow">Ou un pseudo / lien <input id="dUrl" placeholder="kaicenat, kick.com/jolavanille…"></label>
+      <label>Minutes <input id="dMin" value="120" size="4"></label>
+      <button id="dWatch">Surveiller</button>
+    </div>
+    <div id="dRes" class="grid"></div>
+  </section>
+
+  <!-- BIBLIOTHÈQUE -->
+  <section id="tab-biblio" class="tab">
+    <h1>Bibliothèque</h1>
+    <p class="lead">Tes clips. Clique pour voir l'aperçu, changer le titre, les sous-titres ou leur style, puis télécharge le MP4.</p>
+    <div id="bRes" class="grid tall"></div>
+  </section>
+</main>
+
+<!-- fenêtre d'aperçu / d'édition -->
+<div id="modal" class="modal hidden"><div class="box" id="modalBox"></div></div>
+
+<!-- travaux en cours -->
+<aside id="jobs"></aside>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

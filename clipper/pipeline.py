@@ -20,12 +20,13 @@ def _words_in(ws: list[Word], a: float, b: float, shift: float) -> list[Word]:
 
 def style_of(opts) -> dict:
     return {"sep": 8 if getattr(opts, "separateur", False) else 0, "max_words": int(getattr(opts, "mots", 2) or 2),
-            "highlight": getattr(opts, "surlignage", None) or "violet", "sub_y": getattr(opts, "sous_titres_y", None)}
+            "highlight": getattr(opts, "style", None) or getattr(opts, "surlignage", None) or "jaune", "sub_y": getattr(opts, "sous_titres_y", None)}
 
 
 def write_clip(opts, out_dir: Path, base: str, section: Path, layout, words, t_in, dur, title, streamer,
                meta: dict) -> Path:
     mp4 = out_dir / f"{base}.mp4"
+    words = render.merge_elisions(words)  # « c' » + « est » → « c'est » (aussi dans l'éditeur)
     st = style_of(opts)
     if getattr(opts, "sans_titre", False):
         title = ""
@@ -71,6 +72,8 @@ def clip_stream(url: str, opts) -> list[Path]:
     moments = find_moments(url, inf, plat, work, start, end, full, opts)
     moments.sort(key=lambda m: -m.score)
     write_moments(work, moments, start)
+    opts.moments_file = str(work / "moments.json")  # l'interface graphique relit la liste ici
+    opts.analyse_info = {"streamer": streamer, "titre": inf.get("title", ""), "debut": start, "fin": end}
     if getattr(opts, "analyse", False):
         print(f"\nMoments candidats (du plus fort au plus faible) : {work / 'moments.json'}")
         for i, m in enumerate(moments, 1):
@@ -190,8 +193,8 @@ def redo(json_path: str, opts) -> Path:
     st = dict(meta.get("style", {}))  # on garde le style d'origine, sauf ce qui est redemandé
     if opts.mots:
         st["max_words"] = int(opts.mots)
-    if opts.surlignage:
-        st["highlight"] = opts.surlignage
+    if getattr(opts, "style", None) or opts.surlignage:
+        st["highlight"] = getattr(opts, "style", None) or opts.surlignage
     if opts.sous_titres_y:
         st["sub_y"] = opts.sous_titres_y
     if opts.separateur:
@@ -206,6 +209,91 @@ def redo(json_path: str, opts) -> Path:
         lines[0] = title
         txt.write_text("\n".join(lines), encoding="utf-8")
     return out
+
+
+def redo_with(json_path: str | Path, title: str | None = None, words: list[dict] | None = None,
+              style: str | None = None, mots: int | None = None, sub_y: float | None = None) -> Path:
+    """refaire un clip avec un titre, des sous-titres (mots aux mêmes temps) ou un style modifiés (interface)"""
+    jp = Path(json_path)
+    meta = json.loads(jp.read_text(encoding="utf-8"))
+    section = Path(meta["section"])
+    if not section.exists():
+        raise RuntimeError("l'extrait source a été supprimé : il faut refaire le clip depuis le début")
+    L = facecam.Layout(**{k: tuple(v) if isinstance(v, list) else v for k, v in meta["layout"].items()})
+    if words is not None:
+        meta["words"] = [{"start": float(w["start"]), "end": float(w["end"]), "text": str(w["text"]).strip()}
+                         for w in words if str(w.get("text", "")).strip()]
+    if title is not None:
+        meta["title"] = title
+    st = dict(meta.get("style", {}))
+    if style:
+        st["highlight"] = style
+    if mots:
+        st["max_words"] = int(mots)
+    if sub_y:
+        st["sub_y"] = float(sub_y)
+    meta["style"] = st
+    render.render(section, jp.with_suffix(".mp4"), L, [Word(**w) for w in meta["words"]], meta["t_in"], meta["dur"],
+                  meta["title"], meta.get("streamer", ""), **st)
+    jp.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    txt = jp.with_suffix(".txt")
+    if txt.exists():
+        lines = txt.read_text(encoding="utf-8").split("\n")
+        lines[0] = meta["title"]
+        txt.write_text("\n".join(lines), encoding="utf-8")
+    return jp.with_suffix(".mp4")
+
+
+def clip_from_viral(c: dict, opts, index: int = 0) -> Path:
+    """un clip viral (dict de viral.top_clips) → clip vertical. On repart de la rediffusion pour avoir quelques
+    secondes avant le moment ; si elle n'existe plus, on prend le clip Twitch lui-même."""
+    out_dir = Path(opts.sortie)
+    work = out_dir / ".travail" / slug(f"viral-{c.get('login')}-{c.get('id')}", 70)
+    work.mkdir(parents=True, exist_ok=True)
+    streamer = c.get("streamer") or c.get("login") or "streamer"
+    d = float(c.get("duree") or 30)
+    section = work / "section.mp4"
+    info_f = work / "section.json"
+    if section.exists() and info_f.exists():
+        base = json.loads(info_f.read_text(encoding="utf-8"))
+    else:
+        base = None
+        if c.get("vod") and c.get("offset") is not None:
+            t0 = max(0.0, float(c["offset"]) - 6.0)
+            try:
+                log(f"« {c.get('titre', '')[:50]} » ({streamer}) : extrait de la rediffusion")
+                source.grab(c["vod"], section, t0, d + 10.0)
+                base = {"mode": "vod", "t0": t0}
+            except Exception as e:
+                log(f"rediffusion indisponible ({str(e)[:80]}) : on prend le clip Twitch")
+        if base is None:
+            source.grab(c["url"], section, 0.0, d + 1.0)
+            base = {"mode": "clip", "t0": 0.0}
+        info_f.write_text(json.dumps(base), encoding="utf-8")
+    from .util import video_info
+    sec_dur = video_info(section)[3]
+    if base["mode"] == "vod":
+        s0, s1 = float(c["offset"]) - base["t0"] - 2.0, float(c["offset"]) - base["t0"] + d + 2.5
+    else:
+        s0, s1 = 0.0, d
+    s0, s1 = max(0.0, s0), min(sec_dur - 0.05, s1)
+    lang = opts.langue or (c.get("langue") if c.get("langue") in ("fr", "en", "es", "de", "it", "pt") else None)
+    transcribe.load(opts.modele)
+    wav = analyze.slice_wav(section, 0, sec_dur, work / "section.wav")
+    ws, lang = transcribe.words(wav, lang)
+    wav.unlink(missing_ok=True)
+    for w in ws:  # pas de mot coupé au début ni à la fin
+        if w.start < s0 < w.end:
+            s0 = max(0.0, w.start - 0.1)
+        if w.start < s1 < w.end:
+            s1 = min(sec_dur - 0.05, w.end + 0.2)
+    layout = facecam.detect(section, opts.cam)
+    words = _words_in(ws, s0, s1, s0)
+    title = render.fill_title(opts.titre, streamer, opts.jeu) if opts.titre \
+        else render.auto_title(streamer, opts.jeu, analyze.mood(words), index, opts.titre_langue)
+    name = f"{slug(c.get('login') or streamer, 30)}_viral_{slug(c.get('id') or 'clip', 12)}"
+    return write_clip(opts, out_dir, name, section, layout, words, s0, s1 - s0, title, streamer,
+                      {"source": c.get("url"), "source_link": c.get("lien_vod") or c.get("url"), "viral": c})
 
 
 def clean_work(sortie: str):

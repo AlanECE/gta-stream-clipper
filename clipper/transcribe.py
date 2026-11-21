@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 from .analyze import Word
@@ -9,6 +10,7 @@ from .util import log
 
 _model = None
 _name = None
+_lock = threading.Lock()  # une transcription à la fois (live + rendu en même temps)
 
 
 def _cuda_dlls():
@@ -29,6 +31,12 @@ def _cuda_dlls():
 
 def _gpu() -> bool:
     _cuda_dlls()
+    if os.name == "nt":  # une carte NVIDIA sans les bibliothèques CUDA ne sert à rien : on vérifie qu'elles se chargent
+        import ctypes
+        try:
+            ctypes.WinDLL("cublas64_12.dll")
+        except OSError:
+            return False
     try:
         import ctranslate2
         return ctranslate2.get_cuda_device_count() > 0
@@ -43,13 +51,30 @@ def load(name: str | None = None, cpu: bool = False):
     from faster_whisper import WhisperModel
     gpu = _gpu() and not cpu
     name = name or os.environ.get("CLIPPER_WHISPER") or ("large-v3-turbo" if gpu else "small")
+    # l'exécutable range le modèle dans ses propres données (pas dans un cache partagé)
+    root = None
+    if os.environ.get("CLIPPER_FROZEN"):
+        root = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "gta-stream-clipper", "modeles")
     log(f"Whisper {name} sur {'la carte graphique' if gpu else 'le processeur'} (premier lancement : téléchargement du modèle)")
-    _model = WhisperModel(name, device="cuda" if gpu else "cpu", compute_type="float16" if gpu else "int8")
+    try:
+        _model = WhisperModel(name, device="cuda" if gpu else "cpu", compute_type="float16" if gpu else "int8",
+                              download_root=root)
+    except Exception as e:
+        if not gpu:
+            raise
+        log(f"carte graphique indisponible pour Whisper ({str(e)[:80]}) : passage au processeur")
+        name = "small"
+        _model = WhisperModel(name, device="cpu", compute_type="int8", download_root=root)
     _name = name
     return _model
 
 
 def words(wav: Path, lang: str | None = None) -> tuple[list[Word], str]:
+    with _lock:
+        return _words(wav, lang)
+
+
+def _words(wav: Path, lang: str | None = None) -> tuple[list[Word], str]:
     global _model
     for essai in range(2):
         m = load(_name)

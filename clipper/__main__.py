@@ -36,8 +36,9 @@ def options(p: argparse.ArgumentParser):
     t.add_argument("--jeu", default="GTA 6", help="nom du jeu dans le titre (défaut GTA 6)")
     t.add_argument("--streamer", help="nom du streameur dans le titre (sinon celui de la chaîne)")
     t.add_argument("--mots", type=int, choices=[1, 2, 3], help="sous-titres : mots affichés à la fois (défaut 2)")
-    t.add_argument("--surlignage", help="mot dit : violet (défaut), rouge, vert, bleu, orange, #code couleur, "
-                                        "ou jaune (texte jaune sans boîte)")
+    t.add_argument("--style", help="sous-titres : jaune (défaut : le mot dit en jaune), tout-jaune, blanc, boite-jaune, "
+                                   "boite-violette, boite-rouge, boite-verte, ou #RRGGBB (boîte de cette couleur)")
+    t.add_argument("--surlignage", help=argparse.SUPPRESS)
     t.add_argument("--sous-titres-y", type=float, help="hauteur des sous-titres, de 0 (haut) à 1 (bas), défaut 0.68")
     t.add_argument("--langue", help="langue parlée (en, fr…) ; sinon détectée")
     t.add_argument("--modele", help="modèle Whisper (défaut large-v3-turbo sur carte graphique, small sinon)")
@@ -72,6 +73,19 @@ def main(argv=None):
     p.add_argument("--filtre", default="GTA 6", help="mot cherché dans les titres (défaut GTA 6)")
     p.add_argument("--minutes", type=float, default=30, help="en live : durée d'écoute par stream")
     p.add_argument("--liste", action="store_true", help="juste lister, sans clipper")
+    options(p)
+    p = sub.add_parser("viral", help="les clips les plus vus sur Twitch (par jeu, langue ou streameur) : liste ou montage")
+    p.add_argument("--periode", default="jour", choices=["jour", "semaine", "mois", "tout"], help="défaut : jour")
+    p.add_argument("--langue-clips", help="seulement les clips dans cette langue (fr, en, es…)")
+    p.add_argument("--chaine", help="seulement les clips de ce streameur (pseudo Twitch)")
+    p.add_argument("--jeu-twitch", default="Grand Theft Auto VI", help="catégorie Twitch (défaut Grand Theft Auto VI)")
+    p.add_argument("--liste", action="store_true", help="juste lister, sans monter")
+    options(p)
+    p = sub.add_parser("app", help="l'interface graphique (dans le navigateur)")
+    p.add_argument("--host", default="127.0.0.1", help="127.0.0.1 (défaut) ; 0.0.0.0 sur un serveur")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--mot-de-passe", help="obligatoire si --host 0.0.0.0 (serveur)")
+    p.add_argument("--sans-navigateur", action="store_true", help="ne pas ouvrir le navigateur")
     options(p)
     p = sub.add_parser("fichier", help="clipper une vidéo déjà téléchargée")
     p.add_argument("video")
@@ -111,6 +125,21 @@ def main(argv=None):
                     made += clip_live(s["url"], a)
                 else:
                     made += pipeline.clip_stream(s["url"], a)
+    elif a.cmd == "viral":
+        from .viral import top_clips
+        clips = top_clips(a.jeu_twitch, a.periode, a.langue_clips, a.chaine, n=max(20, a.nb))
+        if not clips:
+            sys.exit("aucun clip trouvé pour ces filtres")
+        for i, c in enumerate(clips, 1):
+            print(f"  {i:>2}. {c['vues']:>7} vues · {c['streamer']:<16} · {c['titre'][:50]:<50} · {c['url']}")
+        if not a.liste:
+            idx = [int(x) - 1 for x in a.choix.split(",")] if a.choix else list(range(min(a.nb, len(clips))))
+            for k, i in enumerate(idx):
+                if 0 <= i < len(clips):
+                    made.append(pipeline.clip_from_viral(clips[i], a, k))
+    elif a.cmd == "app":
+        from .app.server import serve
+        serve(a)
     elif a.cmd == "refaire":
         made = [pipeline.redo(a.clip_json, a)]
     if made:
