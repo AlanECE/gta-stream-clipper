@@ -72,7 +72,8 @@ def load(name: str | None = None, cpu: bool = False):
     # l'exécutable range le modèle dans ses propres données (pas dans un cache partagé)
     root = None
     if os.environ.get("CLIPPER_FROZEN"):
-        root = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "gta-stream-clipper", "modeles")
+        from .util import data_dir
+        root = str(data_dir() / "modeles")
     first = "" if _here(name, root) else \
         f" : téléchargement du modèle ({SIZES.get(name, 'plusieurs centaines de Mo')}), une seule fois, patiente"
     log(f"Whisper {name} sur {'la carte graphique' if gpu else 'le processeur'}{first}")

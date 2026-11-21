@@ -1,28 +1,31 @@
-# GTA Stream Clipper
+<p align="center"><img src="docs/logo.png" width="128" alt="GTA Stream Clipper"></p>
 
-**Des streams GTA aux clips verticaux prêts à poster.** Il va chercher les moments qui ont déjà fait le buzz sur
-Twitch, ou il écoute une rediffusion (Twitch, Kick) ou un live, et sort des clips 1080x1920 :
+<h1 align="center">GTA Stream Clipper</h1>
 
-```
-┌──────────────────────────┐
-│                          │
-│   WEBCAM DU STREAMEUR    │   ← un tiers de la hauteur, recadrée sur lui
-│                          │
-│ ╭──────────────────────╮ │
-├─│ Kai Cenat est bloqué │─┤   ← le titre façon TikTok (boîte blanche, emojis Apple),
-│ │    sur GTA 6 😭      │ │     posé sur la jonction, du début à la fin
-│ ╰──────────────────────╯ │
-│                          │
-│         GAMEPLAY         │   ← le jeu, sans la webcam ni le chat
-│                          │
-│        OH  MY            │   ← sous-titres deux mots par deux mots,
-│                          │     le mot prononcé en jaune
-└──────────────────────────┘
-```
+<p align="center"><b>Des streams GTA 6 aux clips verticaux prêts à poster.</b><br>
+Il trouve les moments qui ont déjà fait le buzz sur Twitch, ou il écoute une rediffusion (Twitch, Kick) ou un live,
+et sort des clips 1080x1920 : la webcam du streameur en haut, le jeu en dessous, un titre avec emojis et les
+sous-titres mot à mot. Gratuit, open source, sans compte et sans clé d'API.</p>
 
-Une application (Windows), un outil en ligne de commande et un skill pour [Claude Code](https://claude.com/claude-code),
-créés par [Alan (iAlan)](https://github.com/AlanECE). Gratuit, open source (MIT). **Aucune clé d'API**, ni d'IA ni de
-Twitch : tout tourne sur ton PC (ou ton serveur).
+<p align="center">
+  <a href="https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Setup.exe"><img src="https://img.shields.io/badge/%E2%AC%87%20T%C3%A9l%C3%A9charger-Windows-c026d3?style=for-the-badge" height="40" alt="Télécharger pour Windows"></a>
+  &nbsp;
+  <a href="https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Mac.dmg"><img src="https://img.shields.io/badge/%E2%AC%87%20T%C3%A9l%C3%A9charger-Mac-1a1a1a?style=for-the-badge" height="40" alt="Télécharger pour Mac"></a>
+  <br><sub>Windows 10 / 11 (64 bits) · Mac à puce Apple (M1 et plus récents), macOS 12 ou plus · gratuit, sans compte</sub>
+</p>
+
+<p align="center"><img src="docs/screenshots/interface.png" width="760" alt="L'onglet Clips viraux"></p>
+
+<p align="center">
+  <img src="docs/screenshots/exemple-gotaga.jpg" width="230" alt="Un clip de Gotaga sorti par l'application">
+  &nbsp;
+  <img src="docs/screenshots/exemple-anyme023.jpg" width="230" alt="Un clip d'Anyme023 sorti par l'application">
+  <br><sub>Deux clips viraux sortis par l'application, sans retouche</sub>
+</p>
+
+Une application (Windows et Mac), un outil en ligne de commande et un skill pour
+[Claude Code](https://claude.com/claude-code), créés par [Alan (iAlan)](https://github.com/AlanECE). Licence MIT.
+**Aucune clé d'API**, ni d'IA ni de Twitch : tout tourne sur ton ordinateur (ou ton serveur).
 
 ## Ce qu'il sait faire
 
@@ -40,19 +43,39 @@ Twitch : tout tourne sur ton PC (ou ton serveur).
 
 ## Installation
 
-### L'application Windows (le plus simple)
+### Sur Windows
 
-1. Télécharge **[GTA-Stream-Clipper-Windows.zip](https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Windows.zip)**
-   et décompresse-le.
-2. Double-clique sur **`GTA-Stream-Clipper.exe`** : l'interface s'ouvre dans ton navigateur. La fenêtre noire montre
-   ce que fait l'outil ; la fermer arrête tout.
-3. Tes clips sont rangés dans `Vidéos\GTA Stream Clipper`.
+1. Télécharge **[GTA-Stream-Clipper-Setup.exe](https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Setup.exe)** et double-clique dessus.
+2. Windows peut afficher « Windows a protégé votre ordinateur » (l'application n'est pas signée auprès de
+   Microsoft) : clique sur **Informations complémentaires**, puis **Exécuter quand même**.
+3. Clique sur **Installer**. Pas besoin d'être administrateur. Pendant l'installation, un tuto en 4 écrans montre où
+   cliquer. Une icône **GTA Stream Clipper** est posée sur ton Bureau.
+4. Lance-la : une fenêtre noire s'ouvre (c'est elle qui fait tourner l'application, la fermer arrête tout) et
+   l'interface s'affiche dans ton navigateur. Tes clips sont rangés dans `Vidéos\GTA Stream Clipper`.
 
-Au premier clip, le modèle de transcription se télécharge (0,5 Go). L'application transcrit sur le processeur ; pour
-utiliser ta carte NVIDIA (bien plus rapide), installe la version Python ci-dessous.
+Pour la désinstaller : Paramètres → Applications → GTA Stream Clipper. Tes clips restent dans tes Vidéos.
 
-Windows peut afficher « Windows a protégé votre ordinateur » (l'exécutable n'est pas signé) : clique sur
-« Informations complémentaires », puis « Exécuter quand même ».
+Tu préfères sans installation ? La **[version portable](https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Windows.zip)** : décompresse le zip
+et double-clique sur `GTA-Stream-Clipper.exe`.
+
+### Sur Mac
+
+1. Télécharge **[GTA-Stream-Clipper-Mac.dmg](https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Mac.dmg)**, ouvre-le et glisse
+   **GTA Stream Clipper** dans le dossier **Applications**.
+2. Ouvre l'application. Comme elle n'est pas certifiée par Apple (le certificat coûte 99 $ par an), macOS la bloque la
+   première fois : va dans **Réglages Système → Confidentialité et sécurité**, descends jusqu'au message sur
+   GTA Stream Clipper et clique sur **Ouvrir quand même**, puis confirme. Ce n'est à faire qu'une fois.
+3. Une petite fenêtre GTA Stream Clipper s'ouvre, et l'interface s'affiche dans ton navigateur. Fermer cette fenêtre
+   (ou `⌘ Cmd + Q`) arrête l'application. Tes clips sont rangés dans `Films/GTA Stream Clipper`.
+
+Si macOS dit que l'application est endommagée, ou si rien ne se passe à l'ouverture : ouvre le Terminal, tape
+`xattr -dr com.apple.quarantine "/Applications/GTA Stream Clipper.app"`, puis relance l'application.
+
+### Bon à savoir sur l'application
+
+Au premier clip, le modèle de transcription se télécharge (0,5 Go), une seule fois. L'application transcrit sur le
+processeur (un clip de 30 secondes prend 20 à 40 secondes) ; pour utiliser une carte NVIDIA, bien plus rapide sur un
+long stream, installe la version Python ci-dessous.
 
 ### Avec Claude Code
 
@@ -182,24 +205,32 @@ streameur est en plein écran, l'image est recadrée sur lui.
 - L'extrait source de chaque clip reste dans le dossier `.travail` pour pouvoir le modifier ; supprimer un clip dans
   la bibliothèque supprime aussi son extrait.
 
-## Construire l'exécutable
+## Construire l'application
 
 ```bash
-pip install pyinstaller
-python build_exe.py       # → dist/GTA-Stream-Clipper/ et dist/GTA-Stream-Clipper-Windows.zip
+pip install -r requirements.txt pyinstaller
+python build_exe.py
 ```
+
+- **Windows** : `dist/GTA-Stream-Clipper/`, la version portable `dist/GTA-Stream-Clipper-Windows.zip` et, si
+  [Inno Setup 6](https://jrsoftware.org/isinfo.php) est installé (ou indiqué par la variable `ISCC`), l'installeur
+  `dist/GTA-Stream-Clipper-Setup.exe` (script : [`packaging/installer.iss`](packaging/installer.iss)).
+- **Mac** (puce Apple) : `dist/GTA Stream Clipper.app` et `dist/GTA-Stream-Clipper-Mac.dmg`. Le workflow
+  [Version Mac](.github/workflows/mac.yml) le construit sur un Mac de GitHub, le teste comme un utilisateur
+  (double-clic, un vrai clip viral, l'éditeur, Quitter) et joint le `.dmg` à chaque release publiée.
 
 ## Crédits et licences
 
 GTA Stream Clipper est sous licence [MIT](LICENSE). Il repose sur [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-(Unlicense), [FFmpeg](https://ffmpeg.org/) (l'application Windows embarque la version « essentials » de
-[gyan.dev](https://www.gyan.dev/ffmpeg/builds/), GPL), [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+(Unlicense), [FFmpeg](https://ffmpeg.org/) (l'application embarque la version « essentials » de
+[gyan.dev](https://www.gyan.dev/ffmpeg/builds/) sous Windows et la version statique de
+[Martin Riedl](https://ffmpeg.martin-riedl.de/) sur Mac, GPL), [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
 (MIT) et le modèle [Whisper](https://github.com/openai/whisper) d'OpenAI (MIT), [OpenCV](https://opencv.org/)
 (Apache 2.0) et son détecteur de visages [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)
 (MIT, fourni dans `clipper/assets/models`), [Pillow](https://python-pillow.org/) (MIT-CMU) et la police
 [Montserrat](https://github.com/JulietaUla/Montserrat) (SIL OFL 1.1). Les emojis Apple sont téléchargés au besoin
 depuis le paquet public [emoji-datasource-apple](https://github.com/iamcal/emoji-data) et restent la propriété
-d'Apple ; ils ne sont pas fournis dans ce dépôt.
+d'Apple ; ils ne sont pas fournis dans ce dépôt. L'icône a été dessinée avec GPT Image 2.6.
 
 L'idée vient de [gta6-clipper](https://github.com/vossashtonai/gta6-clipper) d'Ashton Voss (MIT). Le code est écrit de
 zéro. GTA Stream Clipper n'est affilié ni à Rockstar Games, ni à Twitch, ni à Kick, ni à YouTube, ni aux streameurs

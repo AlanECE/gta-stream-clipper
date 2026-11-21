@@ -14,11 +14,17 @@ PKG = Path(__file__).resolve().parent
 ASSETS = PKG / "assets"
 YUNET = ASSETS / "models" / "face_detection_yunet_2023mar.onnx"
 
+import collections
+
+RECENT: collections.deque = collections.deque(maxlen=50)  # dernières lignes du journal (fenêtre de l'appli sur Mac)
+_children: list = []  # processus lancés pour durer (enregistreur d'un live) : arrêtés quand l'appli se ferme
+
 _tls = threading.local()  # l'interface graphique y range la tâche en cours pour en afficher le journal
 
 
 def log(*parts):
     msg = " ".join(str(p) for p in parts)
+    RECENT.append(msg)
     try:
         print("»", msg, flush=True)
     except Exception:
@@ -39,6 +45,30 @@ def same_job(fn):
 
 
 _job_handle = None  # gardé en vie tant que le programme tourne
+
+
+def data_dir() -> Path:
+    """dossier des données de l'appli (modèle de transcription, emojis) : %LOCALAPPDATA%\\gta-stream-clipper sous
+    Windows, ~/Library/Application Support/GTA Stream Clipper sur Mac, ~/.local/share/gta-stream-clipper ailleurs"""
+    import os
+    if sys.platform == "darwin":
+        d = Path.home() / "Library" / "Application Support" / "GTA Stream Clipper"
+    elif os.environ.get("LOCALAPPDATA"):
+        d = Path(os.environ["LOCALAPPDATA"]) / "gta-stream-clipper"
+    else:
+        d = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "gta-stream-clipper"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def kill_children():
+    """arrête les processus encore lancés par l'appli (à sa fermeture)"""
+    for proc in list(_children):
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def die_together():
@@ -88,6 +118,7 @@ def die_together():
 def adopt(proc):
     """range un processus qu'on vient de lancer (l'enregistreur d'un live) dans le même « job » : certains Python
     (celui du Microsoft Store) laissent leurs enfants en dehors, il faut donc le faire à la main"""
+    _children[:] = [c for c in _children if c.poll() is None] + [proc]
     if not _job_handle:
         return
     try:

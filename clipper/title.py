@@ -40,8 +40,8 @@ def _clean(text: str) -> str:
 
 
 def cache_dir() -> Path:
-    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".cache")
-    d = Path(base) / "gta-stream-clipper" / "emoji-apple"
+    from .util import data_dir
+    d = data_dir() / "emoji-apple"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
