@@ -6,8 +6,6 @@
 name: Version Mac
 
 on:
-  push:
-    branches: [version-1.3]   # temporaire : test de la version Mac avant la release
   release:
     types: [published]
   workflow_dispatch:

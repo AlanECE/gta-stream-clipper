@@ -153,6 +153,8 @@ try:
     say("RÉSULTAT : tout est passé")
     finish(True)
 except SystemExit as e:
+    if e.code in (0, None):  # finish(True) : tout est passé
+        raise
     say(str(e))
     shot("echec")
     finish(False)
