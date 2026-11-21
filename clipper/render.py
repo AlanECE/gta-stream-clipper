@@ -87,7 +87,7 @@ def clean_word(w: str) -> str:
 
 def merge_elisions(words: list[Word]) -> list[Word]:
     """Whisper coupe « c'est » en « c' » + « est » (ou « c » + « 'est »), « vas-y » en « vas » + « -y »,
-    « 4,4 » en « 4 » + « ,4 » : on recolle"""
+    « 4,4 » en « 4 » + « ,4 », et sort parfois un « ? » tout seul : on recolle au mot d'avant"""
     out: list[Word] = []
     for w in words:
         t = w.text.strip().replace("’", "'")
@@ -95,7 +95,8 @@ def merge_elisions(words: list[Word]) -> list[Word]:
             continue
         glue = bool(out) and (t.startswith("'") or out[-1].text.endswith("'")
                               or (t[0] == "-" and len(t) > 1 and t[1].isalnum())
-                              or (re.match(r"[,.]\d", t) is not None and out[-1].text[-1:].isdigit()))
+                              or (re.match(r"[,.][0-9]", t) is not None and out[-1].text[-1:].isdigit())
+                              or re.fullmatch(r"[?!.,;:…]+", t) is not None)
         if glue:
             p = out[-1]
             out[-1] = Word(p.start, w.end, p.text + t)

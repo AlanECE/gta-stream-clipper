@@ -38,6 +38,68 @@ def same_job(fn):
     return wrap
 
 
+_job_handle = None  # gardé en vie tant que le programme tourne
+
+
+def die_together():
+    """Windows : quand le programme s'arrête (fenêtre fermée, plantage), ffmpeg et yt-dlp s'arrêtent avec lui.
+    Sans ça, l'enregistrement d'un live continuerait tout seul et remplirait le disque. On range le programme
+    dans un « job » Windows réglé pour tuer tout son contenu à la fermeture."""
+    global _job_handle
+    if sys.platform != "win32" or _job_handle:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class BASIC(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+
+        class IO(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_uint64) for n in ("ReadOp", "WriteOp", "OtherOp", "ReadTr", "WriteTr", "OtherTr")]
+
+        class EXTENDED(ctypes.Structure):
+            _fields_ = [("Basic", BASIC), ("Io", IO), ("ProcessMemoryLimit", ctypes.c_size_t),
+                        ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.CreateJobObjectW.restype = wintypes.HANDLE
+        k.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        k.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        k.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k.GetCurrentProcess.restype = wintypes.HANDLE
+        job = k.CreateJobObjectW(None, None)
+        if not job:
+            return
+        info = EXTENDED()
+        info.Basic.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if k.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            _job_handle = job
+            k.AssignProcessToJobObject(job, k.GetCurrentProcess())
+    except Exception:  # noqa: BLE001 (un confort : sans lui, tout marche comme avant)
+        pass
+
+
+def adopt(proc):
+    """range un processus qu'on vient de lancer (l'enregistreur d'un live) dans le même « job » : certains Python
+    (celui du Microsoft Store) laissent leurs enfants en dehors, il faut donc le faire à la main"""
+    if not _job_handle:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k.AssignProcessToJobObject(_job_handle, int(proc._handle))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def need(*tools):
     for tool in tools:
         if not shutil.which(tool):

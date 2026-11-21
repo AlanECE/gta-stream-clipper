@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from .util import log, need
+from .util import die_together, log, need
 
 
 def options(p: argparse.ArgumentParser):
@@ -97,6 +97,7 @@ def main(argv=None):
     options(p)
     a = ap.parse_args(argv)
     need("ffmpeg", "ffprobe")
+    die_together()
 
     from . import pipeline
     made = []

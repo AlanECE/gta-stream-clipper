@@ -26,7 +26,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .. import __version__
-from ..util import ASSETS, _tls, log
+from ..util import ASSETS, _tls, log, why
 
 STATIC = Path(__file__).resolve().parent / "static"
 LANGS = ["fr", "en", "es", "de", "it", "pt"]
@@ -41,6 +41,37 @@ class Lines(list):
         super().append(x)
         if len(self) > 200:
             del self[:100]
+
+
+def explain(e: BaseException) -> str:
+    """l'erreur d'un travail, en une phrase que l'utilisateur comprend"""
+    if isinstance(e, SystemExit):  # nos propres messages d'arrêt, déjà en clair
+        return str(e)[-400:] or "arrêté"
+    low = str(e).lower()
+    if "subscriber-only" in low or "must be logged" in low:
+        return ("Ce stream est réservé aux abonnés de la chaîne : il ne peut pas être téléchargé. "
+                "Essaie les clips viraux du même streameur, ou une autre rediffusion.")
+    if "does not exist" in low or "http error 404" in low:
+        return "Ce lien n'existe pas ou plus (vidéo supprimée, ou lien mal copié)."
+    if "unsupported url" in low or "is not a valid url" in low:
+        return "Ce lien n'est pas reconnu : colle le lien d'une rediffusion Twitch, Kick ou YouTube."
+    if "getaddrinfo" in low or "timed out" in low or "connection" in low and "refused" in low:
+        return "Pas de réponse d'internet : vérifie ta connexion et réessaie."
+    if "no space left" in low or "espace insuffisant" in low:
+        return "Le disque est plein : libère de la place puis réessaie."
+    return why(e) if isinstance(e, Exception) else (str(e)[-300:] or e.__class__.__name__)
+
+
+class Quiet(ThreadingHTTPServer):
+    """le navigateur coupe ses connexions quand on ferme l'onglet : ce n'est pas une erreur à afficher"""
+    daemon_threads = True
+    allow_reuse_address = False  # sous Windows, sinon deux exemplaires se partagent le port
+
+    def handle_error(self, request, client_address):
+        import sys
+        if isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
 
 
 class Job:
@@ -113,8 +144,9 @@ class App:
                 job.status = "fini"
             except BaseException as e:  # noqa: BLE001 (on veut tout remonter à l'interface)
                 job.status = "erreur"
-                job.error = str(e)[-400:] or e.__class__.__name__
-                traceback.print_exc()
+                job.error = explain(e)
+                if not isinstance(e, SystemExit):
+                    traceback.print_exc()
             finally:
                 _tls.job = None
         threading.Thread(target=run, daemon=True).start()
@@ -222,7 +254,7 @@ class App:
 
             def fn(job):
                 o = self.opts(analyse=True, de=body.get("de") or None, a=body.get("a") or None,
-                              langue=body.get("langue") or None, choix=None)
+                              langue=body.get("langue") or None, choix=None, pas_de_live=True)
                 pipeline.clip_stream(url, o)
                 moments = json.loads(Path(o.moments_file).read_text(encoding="utf-8"))
                 return {"url": url, "de": body.get("de"), "a": body.get("a"), "langue": body.get("langue"),
@@ -231,7 +263,7 @@ class App:
         if t == "moment":
             def fn(job):
                 o = self.opts(analyse=False, de=body.get("de") or None, a=body.get("a") or None,
-                              langue=body.get("langue") or None, choix=str(body["n"]),
+                              langue=body.get("langue") or None, choix=str(body["n"]), pas_de_live=True,
                               titres=body.get("titre") or None, style=body.get("style") or "jaune")
                 made = pipeline.clip_stream(body["url"], o)
                 return {"clip": made[0].stem if made else None}
@@ -411,8 +443,6 @@ def serve(opts: argparse.Namespace):
     if not getattr(opts, "style", None):
         opts.style = "jaune"
     local = host in ("127.0.0.1", "localhost")
-    ThreadingHTTPServer.daemon_threads = True
-    ThreadingHTTPServer.allow_reuse_address = False  # sous Windows, sinon deux exemplaires se partagent le port
     if local:  # déjà ouvert (double-clic sur l'exécutable) ? on rouvre simplement la page
         try:
             cfg = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/config", timeout=2).read())
@@ -428,7 +458,7 @@ def serve(opts: argparse.Namespace):
     httpd = None
     for k in range(20 if local else 1):  # port pris par un autre programme : on essaie les suivants
         try:
-            httpd = ThreadingHTTPServer((host, port + k), handler)
+            httpd = Quiet((host, port + k), handler)
             port += k
             break
         except OSError:
@@ -438,7 +468,7 @@ def serve(opts: argparse.Namespace):
     if local:
         # « localhost » est d'abord essayé en IPv6 par Windows : sans écoute de ce côté, chaque requête attend
         # 0,2 à 2 secondes avant de retomber sur 127.0.0.1. On écoute donc aussi sur ::1.
-        class V6(ThreadingHTTPServer):
+        class V6(Quiet):
             address_family = socket.AF_INET6
         try:
             threading.Thread(target=V6(("::1", port), handler).serve_forever, daemon=True).start()

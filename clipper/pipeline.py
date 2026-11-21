@@ -50,7 +50,13 @@ def clip_stream(url: str, opts) -> list[Path]:
     plat = source.platform(url)
     log(f"lecture du stream : {url}")
     inf = source.info(url)
-    if inf.get("is_live"):
+    # la rediffusion d'un live encore en cours s'annonce « en direct » elle aussi : un lien de rediffusion
+    # (ou une plage demandée) s'analyse comme une rediffusion ; seul un lien de chaîne passe en mode live
+    vod = "/videos/" in url or "/video/" in url or bool(opts.de or opts.a) or plat == "fichier"
+    if inf.get("is_live") and not vod:
+        if getattr(opts, "pas_de_live", False):  # onglet « Depuis un lien » de l'interface
+            raise SystemExit("Ce lien est un live en cours. Pour le surveiller : onglet « En direct ». Pour le "
+                             "clipper ici : colle le lien de sa rediffusion (twitch.tv/videos/…) avec une plage.")
         log("ce stream est en direct : passage en mode live")
         from .live import clip_live
         return clip_live(url, opts, inf)

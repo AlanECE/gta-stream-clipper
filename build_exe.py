@@ -25,7 +25,9 @@ def ffmpeg(dst: Path):
     BUILD.mkdir(exist_ok=True)
     if not z.exists():
         print("téléchargement de FFmpeg…", flush=True)
-        urllib.request.urlretrieve(FF_URL, z)
+        part = z.with_suffix(".part")  # un téléchargement coupé ne laisse pas un zip incomplet derrière lui
+        urllib.request.urlretrieve(FF_URL, part)
+        part.replace(z)
     dst.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(z) as zf:
         for n in zf.namelist():

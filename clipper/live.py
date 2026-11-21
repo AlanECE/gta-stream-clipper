@@ -19,7 +19,7 @@ import numpy as np
 from . import analyze, chat, facecam, render, source, transcribe
 from .analyze import Moment, Word
 from .pipeline import _words_in, write_clip
-from .util import hms, log, run, slug, why
+from .util import adopt, hms, log, run, slug, why
 
 SEG = 20            # secondes par morceau
 KEEP = 15 * 60      # vidéo gardée sur le disque : les 15 dernières minutes
@@ -54,6 +54,7 @@ class Recorder:
                 str(self.d / f"r{k}_%05d.ts")]
         self.err = open(self.d / f"ffmpeg_{k}.log", "w")
         self.p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=self.err)
+        adopt(self.p)  # si le programme est fermé d'un coup, l'enregistrement s'arrête avec lui
         return True
 
     def alive(self) -> bool:
