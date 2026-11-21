@@ -1,0 +1,12 @@
+# Streameurs regardés par « python -m clipper trouver » (rediffusions), un pseudo Twitch par ligne.
+# Ajoute ou retire qui tu veux. Seules les rediffusions avec « GTA 6 » dans le titre sont gardées (--filtre).
+kaicenat
+xqc
+summit1g
+jynxzi
+caseoh_
+shroud
+lirik
+sodapoppin
+hasanabi
+moistcr1tikal

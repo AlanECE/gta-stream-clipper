@@ -1,0 +1,9 @@
+clips/
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+*.mp4
+*.wav
+*.ogg
