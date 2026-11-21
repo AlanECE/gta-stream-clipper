@@ -27,13 +27,16 @@ Twitch : tout tourne sur ton PC (ou ton serveur).
 ## Ce qu'il sait faire
 
 - **🔥 Clips viraux** : les clips les plus vus sur Twitch (24 h, 7 jours, 30 jours), filtrés par langue ou par
-  streameur. Tu regardes le clip, tu cliques : il remonte le moment depuis la rediffusion, quelques secondes avant et
-  après, au format vertical.
+  streameur. Tu regardes le clip, tu cliques : il reprend le clip tel quel (le moment exact, avec son vrai son) et le
+  remet au format vertical, avec le titre et les sous-titres.
 - **🔗 Depuis un lien** : une rediffusion Twitch ou Kick (YouTube marche aussi). Il écoute le stream, repère les moments
   où le streameur s'emballe et te les propose, avec ce qu'il dit.
 - **🔴 En direct** : les lives GTA du moment (filtrés par langue). Tu en choisis un, il le regarde et sort un clip
-  environ une minute après chaque moment fort. Sur un serveur, il peut rester branché sur les lives jour et nuit.
+  environ une minute après chaque moment fort. Avec la **veille**, il attend qu'une chaîne passe en direct, clippe,
+  puis attend son live suivant : sur un serveur, il reste branché sur les lives jour et nuit.
 - **📚 Bibliothèque** : tous tes clips. Aperçu, titre, sous-titres et style modifiables, puis téléchargement en MP4.
+  Si la webcam est mal cadrée, tu traces son cadre à la souris sur l'image d'origine (ou tu choisis « pas de
+  webcam »).
 
 ## Installation
 
@@ -108,6 +111,7 @@ python -m clipper chaine kick:jolavanille
 
 # un live : il écoute et sort les clips au fil de l'eau (Ctrl+C pour arrêter)
 python -m clipper live domingo --minutes 120
+python -m clipper live domingo --veille --minutes 0           # attend ses lives, l'un après l'autre, sans limite
 
 # refaire un clip : autre titre, mot par mot, autre style
 python -m clipper refaire clips/<clip>.json --titre "{streamer} panique sur {jeu} 😱" --mots 1 --style boite-violette
@@ -143,8 +147,10 @@ tmux new -s clipper
 python3 -m clipper app --host 0.0.0.0 --port 8765 --mot-de-passe "un-mot-de-passe-solide" --sans-navigateur
 ```
 
-Ouvre `http://<ip-du-serveur>:8765` (utilisateur `clipper`), lance la surveillance des lives depuis l'onglet
-« En direct » : les clips arrivent dans la bibliothèque, tu les modifies et les télécharges depuis n'importe où.
+Ouvre `http://<ip-du-serveur>:8765` (utilisateur `clipper`), puis dans l'onglet « En direct » tape le pseudo d'un
+streameur, coche **Veille**, mets 0 minute (sans limite) et clique sur « Surveiller » : l'outil attend ses lives, les
+clippe l'un après l'autre, et les clips arrivent dans la bibliothèque. Tu les modifies et les télécharges depuis
+n'importe où. Il ne garde sur le disque que les 15 dernières minutes du live, plus l'extrait de chaque clip.
 `tmux` garde l'outil ouvert quand tu te déconnectes (`Ctrl+B` puis `D` ; `tmux attach -t clipper` pour revenir).
 Sans carte graphique, la transcription tourne sur le processeur : prends au moins 4 cœurs pour suivre un live.
 Pour un vrai nom de domaine en HTTPS, mets un proxy (Caddy, Nginx) devant le port 8765.
@@ -153,11 +159,11 @@ Pour un vrai nom de domaine en HTTPS, mets un proxy (Caddy, Nginx) devant le por
 
 | Étape | Ce qu'il fait |
 |---|---|
-| Clips viraux | l'accès public du site Twitch (le même que yt-dlp) donne les clips les plus vus, avec la seconde exacte dans la rediffusion |
+| Clips viraux | l'accès public du site Twitch (le même que yt-dlp) donne les clips les plus vus ; chaque clip est repris tel quel, avec son vrai son |
 | Moments d'un stream | le volume de sa voix par rapport à son niveau normal (+ la vitesse du chat Twitch ou YouTube, en bonus) |
 | Paroles | Whisper (faster-whisper) transcrit chaque moment sur ton ordinateur ; les mots de réaction (« bro », « chat », « oh my god »…) font monter le score |
 | Cinématiques | les bandes noires des scènes du jeu font baisser le score (les paroles sont celles des personnages) |
-| Webcam | un visage qui ne bouge pas pendant que le jeu bouge, et les bordures nettes autour de lui (le même cadre pour tout le stream) |
+| Webcam | un visage qui ne bouge pas pendant que le jeu bouge, et les bordures nettes autour de lui (le même cadre pour tout le stream) ; une webcam sans bordure est cadrée autour du visage |
 | Clip | webcam en haut (un tiers), jeu en bas, titre en boîte blanche sur la jonction, sous-titres mot à mot, son normalisé à -14 LUFS |
 
 Le chat est **compté, jamais lu**. S'il n'y a pas de webcam, le jeu est posé au centre sur un fond flouté ; si le
@@ -169,10 +175,12 @@ streameur est en plein écran, l'image est recadrée sur lui.
   de streameurs ont un programme de clippeurs ; renseigne-toi avant.
 - La détection des moments d'un stream se trompe parfois (une scène du jeu très bruyante, un dialogue de mission) :
   regarde la liste avant de monter. Les clips viraux, eux, ont déjà été choisis par les viewers.
-- Les streams réservés aux abonnés ne se téléchargent pas. Si une rediffusion a été supprimée, un clip viral est remonté
-  à partir du clip Twitch lui-même.
-- Les extraits sources restent dans le dossier `.travail` des clips pour pouvoir les modifier ; supprime-le quand tu as
-  fini.
+- Les rediffusions réservées aux abonnés ne se téléchargent pas (onglet « Depuis un lien »). Les clips viraux, eux,
+  se téléchargent toujours : c'est le clip Twitch lui-même qui est repris.
+- La webcam est trouvée toute seule dans la plupart des cas. Quand elle ne l'est pas (webcam détourée, très sombre,
+  dessin posé sur le stream), trace son cadre dans l'éditeur du clip.
+- L'extrait source de chaque clip reste dans le dossier `.travail` pour pouvoir le modifier ; supprimer un clip dans
+  la bibliothèque supprime aussi son extrait.
 
 ## Construire l'exécutable
 

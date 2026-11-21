@@ -59,7 +59,9 @@ def main(argv=None):
     options(p)
     p = sub.add_parser("live", help="clipper un stream en direct")
     p.add_argument("lien", help="lien du live ou pseudo Twitch")
-    p.add_argument("--minutes", type=float, default=60, help="durée d'écoute (défaut 60 min)")
+    p.add_argument("--minutes", type=float, default=60, help="durée d'écoute (défaut 60 min ; 0 = sans limite)")
+    p.add_argument("--veille", action="store_true",
+                   help="attendre que la chaîne passe en direct, et attendre le live suivant quand il se termine")
     options(p)
     p = sub.add_parser("chaine", help="clipper les dernières rediffusions d'une chaîne")
     p.add_argument("chaine", help="pseudo Twitch ou lien de chaîne")
@@ -133,10 +135,19 @@ def main(argv=None):
         for i, c in enumerate(clips, 1):
             print(f"  {i:>2}. {c['vues']:>7} vues · {c['streamer']:<16} · {c['titre'][:50]:<50} · {c['url']}")
         if not a.liste:
+            import copy
             idx = [int(x) - 1 for x in a.choix.split(",")] if a.choix else list(range(min(a.nb, len(clips))))
+            titres = [t.strip() for t in (a.titres or "").split("|")]  # un titre par clip choisi, dans l'ordre
             for k, i in enumerate(idx):
-                if 0 <= i < len(clips):
-                    made.append(pipeline.clip_from_viral(clips[i], a, k))
+                if not 0 <= i < len(clips):
+                    continue
+                o = copy.copy(a)
+                if k < len(titres) and titres[k]:
+                    o.titre = titres[k]
+                try:
+                    made.append(pipeline.clip_from_viral(clips[i], o, k))
+                except RuntimeError as e:  # un clip indisponible n'arrête pas les autres
+                    log(f"clip {i + 1} laissé de côté : {str(e).splitlines()[-1][:160]}")
     elif a.cmd == "app":
         from .app.server import serve
         serve(a)

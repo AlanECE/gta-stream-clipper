@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import re
+import struct
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .util import log, run, ytdlp
@@ -70,26 +72,62 @@ def media_urls(url: str, audio=False) -> list[str]:
     return urls
 
 
-def get_audio(url: str, work: Path, start: float, end: float, full: bool) -> Path:
-    """Audio seul de la rediffusion. Le t=0 du fichier correspond au temps `start` du stream."""
-    out = work / f"audio_{int(start)}_{int(end)}.ogg"  # une plage = un fichier (sinon on relirait une autre plage)
+AUDIO_SR = 16000   # ce que Whisper attend
+AUDIO_CHUNK = 300  # secondes par morceau : les morceaux se téléchargent en même temps
+
+
+def get_audio(url: str, work: Path, start: float, end: float, full: bool = False) -> Path:
+    """Son seul de la plage [start, end], en WAV mono. Le t=0 du fichier correspond au temps `start` du stream.
+
+    La plage est coupée en morceaux de 5 minutes téléchargés en parallèle (bien plus vite qu'à la suite), puis
+    recollés à l'échantillon près : un morceau trop court (trou dans le flux) est complété par du silence, pour que
+    les temps restent justes jusqu'au bout."""
+    out = work / f"audio_{int(start)}_{int(end)}.wav"  # une plage = un fichier (sinon on relirait une autre plage)
     if out.exists() and out.stat().st_size > 10_000:
         return out
-    if is_local(url):
-        run(["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", url, "-t", f"{end - start:.3f}",
-             "-vn", "-ac", "1", "-c:a", "libopus", "-b:a", "32k", out])
-        return out
-    if full:
-        # rediffusion entière : le téléchargeur de yt-dlp va beaucoup plus vite (fragments en parallèle)
-        ytdlp("-f", AUDIO_FMT, "-N", "16", "--no-playlist", "--no-part", "-o", str(work / "audio_src.%(ext)s"), url)
-        src = next(p for p in work.glob("audio_src.*"))
-        run(["ffmpeg", "-y", "-v", "error", "-i", src, "-vn", "-ac", "1", "-c:a", "libopus", "-b:a", "32k", out])
-        src.unlink(missing_ok=True)
-        return out
-    # une plage : ffmpeg coupe à la seconde près (yt-dlp, lui, coupe sur une image clé)
-    u = media_urls(url, audio=True)[0]
-    run(["ffmpeg", "-y", "-v", "error", "-ss", f"{start:.3f}", "-i", u, "-t", f"{end - start:.3f}",
-         "-vn", "-ac", "1", "-c:a", "libopus", "-b:a", "32k", out])
+    src = url if is_local(url) else media_urls(url, audio=True)[0]
+    total = max(1.0, end - start)
+    spans = [(start + i * AUDIO_CHUNK, min(AUDIO_CHUNK, total - i * AUDIO_CHUNK))
+             for i in range(int((total - 1e-6) // AUDIO_CHUNK) + 1)]
+
+    def part(k: int) -> Path:
+        t, d = spans[k]
+        f = work / f"audio_part_{int(start)}_{k}.pcm"
+        for _ in range(3):
+            r = run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", src, "-t", f"{d:.3f}", "-vn", "-ac", "1",
+                     "-ar", str(AUDIO_SR), "-f", "s16le", f], check=False)
+            if r.returncode == 0 and f.exists() and f.stat().st_size > 0:
+                break
+        return f
+
+    with ThreadPoolExecutor(4 if is_local(url) else 12) as ex:
+        parts = list(ex.map(part, range(len(spans))))
+    tmp, size, got_any = out.with_suffix(".tmp"), 0, False
+    with open(tmp, "wb") as w:
+        w.write(b"\0" * 44)
+        for f, (_, d) in zip(parts, spans):
+            want, got = int(round(d * AUDIO_SR)) * 2, 0
+            if f.exists():
+                with open(f, "rb") as r:
+                    while got < want:
+                        chunk = r.read(min(1 << 20, want - got))
+                        if not chunk:
+                            break
+                        w.write(chunk)
+                        got += len(chunk)
+                f.unlink(missing_ok=True)
+                got_any = got_any or got > 0
+            if got < want:
+                w.write(b"\0" * (want - got))
+            size += want
+        w.seek(0)
+        w.write(b"RIFF" + struct.pack("<I", 36 + size) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, AUDIO_SR,
+                                                                                     AUDIO_SR * 2, 2, 16)
+                + b"data" + struct.pack("<I", size))
+    if not got_any:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError("impossible de lire le son de ce stream (plage hors de la vidéo, ou flux indisponible)")
+    tmp.replace(out)
     return out
 
 
@@ -114,6 +152,20 @@ def grab(url: str, out: Path, start: float, dur: float) -> Path:
     return out
 
 
+def fetch(url: str, out: Path, dur: float = 60.0) -> Path:
+    """Un clip (Twitch…) tel quel : c'est déjà un MP4 complet, on le copie sans le réencoder."""
+    urls = media_urls(url)
+    if len(urls) == 1:
+        try:
+            run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", urls[0], "-map", "0:v:0", "-map", "0:a:0?",
+                 "-c", "copy", out])
+            if out.exists() and out.stat().st_size > 50_000:
+                return out
+        except RuntimeError:
+            pass
+    return grab(url, out, 0.0, dur + 1.0)
+
+
 def low_video_url(url: str) -> str | None:
     """le flux vidéo le plus léger (160p sur Twitch) : assez pour regarder quelques images"""
     if is_local(url):
@@ -125,18 +177,17 @@ def low_video_url(url: str) -> str | None:
         return None
 
 
-def frames_at(src: str, times: list[float], w: int = 256, h: int = 144) -> list:
-    """quelques images en niveaux de gris, petites, aux temps donnés"""
-    import numpy as np
+def frames_span(src: str, start: float, dur: float, n: int = 3, w: int = 256, h: int = 144) -> list:
+    """n petites images en niveaux de gris réparties sur [start, start + dur], en une seule lecture du flux"""
     import subprocess
-    out = []
-    for t in times:
-        r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{max(0.0, t):.2f}", "-i", src, "-frames:v", "1",
-                            "-vf", f"scale={w}:{h}", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
-                           capture_output=True, timeout=60)
-        if len(r.stdout) == w * h:
-            out.append(np.frombuffer(r.stdout, np.uint8).reshape(h, w))
-    return out
+
+    import numpy as np
+    a, d = max(0.0, start + 0.2 * dur), max(1.0, 0.75 * dur)
+    r = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{a:.2f}", "-t", f"{d:.2f}", "-i", src, "-an",
+                        "-vf", f"fps={n / d:.5f},scale={w}:{h}", "-frames:v", str(n), "-f", "rawvideo",
+                        "-pix_fmt", "gray", "-"], capture_output=True, timeout=120)
+    k = len(r.stdout) // (w * h)
+    return [np.frombuffer(r.stdout[i * w * h:(i + 1) * w * h], np.uint8).reshape(h, w) for i in range(k)]
 
 
 def channel_vods(channel: str, n: int = 10) -> list[dict]:

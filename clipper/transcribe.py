@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 from pathlib import Path
 
@@ -11,6 +12,9 @@ from .util import log
 _model = None
 _name = None
 _lock = threading.Lock()  # une transcription à la fois (live + rendu en même temps)
+# sur de la musique ou du silence, Whisper invente parfois ces phrases (elles viennent des vidéos qui l'ont entraîné)
+INVENTED = re.compile(r"sous\s?-?\s?titr|amara\.org|merci d'avoir regard|subtitles? by|thanks? for watching|"
+                      r"transcri(bed|ption) by", re.I)
 
 
 def _cuda_dlls():
@@ -44,6 +48,20 @@ def _gpu() -> bool:
         return False
 
 
+SIZES = {"tiny": "0,1 Go", "base": "0,2 Go", "small": "0,5 Go", "medium": "1,5 Go", "large-v3-turbo": "1,6 Go",
+         "large-v3": "3 Go"}
+
+
+def _here(name: str, root: str | None) -> bool:
+    """le modèle est-il déjà sur le disque ?"""
+    try:
+        from faster_whisper.utils import download_model
+        download_model(name, local_files_only=True, cache_dir=root)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def load(name: str | None = None, cpu: bool = False):
     global _model, _name
     if _model is not None and not cpu:
@@ -55,7 +73,9 @@ def load(name: str | None = None, cpu: bool = False):
     root = None
     if os.environ.get("CLIPPER_FROZEN"):
         root = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "gta-stream-clipper", "modeles")
-    log(f"Whisper {name} sur {'la carte graphique' if gpu else 'le processeur'} (premier lancement : téléchargement du modèle)")
+    first = "" if _here(name, root) else \
+        f" : téléchargement du modèle ({SIZES.get(name, 'plusieurs centaines de Mo')}), une seule fois, patiente"
+    log(f"Whisper {name} sur {'la carte graphique' if gpu else 'le processeur'}{first}")
     try:
         _model = WhisperModel(name, device="cuda" if gpu else "cpu", compute_type="float16" if gpu else "int8",
                               download_root=root)
@@ -81,8 +101,12 @@ def _words(wav: Path, lang: str | None = None) -> tuple[list[Word], str]:
         try:
             segs, info = m.transcribe(str(wav), language=lang, word_timestamps=True, vad_filter=True,
                                       beam_size=5, condition_on_previous_text=False)
-            out = [Word(float(w.start), float(w.end), w.word.strip())
-                   for s in segs for w in (s.words or []) if w.word.strip()]
+            out = []
+            for s in segs:
+                ws = [w for w in (s.words or []) if w.word.strip()]
+                if len(ws) <= 9 and INVENTED.search(s.text or ""):
+                    continue
+                out += [Word(float(w.start), float(w.end), w.word.strip()) for w in ws]
             return out, info.language
         except RuntimeError as e:  # carte graphique sans les bibliothèques CUDA : on repasse sur le processeur
             if essai or "cuda" not in str(e).lower() and "cublas" not in str(e).lower() and "cudnn" not in str(e).lower():

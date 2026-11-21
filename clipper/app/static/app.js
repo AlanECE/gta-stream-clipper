@@ -83,12 +83,15 @@ function viralModal(c) {
     <a href="${esc(c.url)}" target="_blank" style="color:var(--accent)">ouvrir sur Twitch</a></p>${embed}
     <div class="field" style="margin-top:14px"><span class="l">Titre du clip vertical (vide = un titre automatique ; emojis acceptés)</span><input type="text" id="mTitre" placeholder="${esc(c.streamer)} se foire sur GTA 6 💀"></div>
     <div class="field"><span class="l">Style des sous-titres</span>${stylePicker(style)}</div>
-    <div class="row"><button class="primary" id="mGo">Créer le clip vertical</button><span class="muted">Il remonte le moment depuis la rediffusion (quelques secondes avant et après), environ 1 minute.</span></div>`);
-  bindPicker($("#modalBox"), (s) => { style = s; currentStyle = s; localStorage.setItem("style", s); });
+    <div class="row"><button class="primary" id="mGo">Créer le clip vertical</button><span class="muted">Le clip est repris tel quel (le moment exact, avec son vrai son) et remis en vertical : 20 à 40 secondes.</span></div>`);
+  bindPicker($(".styles", $("#modalBox")), (s) => { style = s; currentStyle = s; localStorage.setItem("style", s); });
   $("#mGo").onclick = async () => {
-    const job = await api("/api/jobs", { type: "viral", clip: c, style, titre: $("#mTitre").value.trim() });
-    closeModal();
-    track(job, (j) => j.status === "fini" && j.result?.clip ? (loadLibraryCount(), editClip(j.result.clip)) : null);
+    $("#mGo").disabled = true;
+    try {
+      const job = await api("/api/jobs", { type: "viral", clip: c, style, titre: $("#mTitre").value.trim() });
+      closeModal();
+      track(job, (j) => j.status === "fini" && j.result?.clip ? (loadLibraryCount(), editClip(j.result.clip)) : null);
+    } catch (e) { $("#mGo").disabled = false; alert("Erreur : " + e.message); }
   };
 }
 
@@ -129,9 +132,15 @@ $("#dGo").onclick = async () => {
 };
 $("#dWatch").onclick = () => { const u = $("#dUrl").value.trim(); if (u) watchLive(u, u); };
 async function watchLive(url, who) {
-  if (!confirm(`Surveiller le live de ${who} pendant ${$("#dMin").value} minutes ? Les clips arriveront dans la bibliothèque.`)) return;
-  const job = await api("/api/jobs", { type: "live", url, minutes: $("#dMin").value, style: currentStyle });
-  track(job, () => loadLibraryCount());
+  const min = Math.max(0, parseFloat($("#dMin").value) || 0), veille = $("#dVeille").checked;
+  const combien = min ? `pendant ${min} minutes` : (veille ? "sans limite de durée" : "jusqu'à la fin du live");
+  const quoi = veille ? `Mettre ${who} en veille ${combien} ? L'outil attend qu'il passe en direct, clippe, puis attend son live suivant.`
+    : `Surveiller le live de ${who} ${combien} ?`;
+  if (!confirm(quoi + " Les clips arriveront dans la bibliothèque.")) return;
+  try {
+    const job = await api("/api/jobs", { type: "live", url, minutes: min, veille, style: currentStyle });
+    track(job, () => loadLibraryCount());
+  } catch (e) { alert("Erreur : " + e.message); }
 }
 
 // ---------- bibliothèque
@@ -147,7 +156,9 @@ function renderLibrary(items) {
 }
 async function editClip(id) {
   const c = await api("/api/clip/" + encodeURIComponent(id));
-  let style = c.style, mots = c.mots;
+  const cad = c.cadrage || {};
+  let style = c.style, mots = c.mots, cadrage = "", cam = null; // cadrage : "" = inchangé, "auto", "jeu", "main"
+  const NOMS = { split: "webcam en haut, jeu en bas", jeu: "pas de webcam : le jeu au centre", plein: "streameur en plein écran" };
   openModal(`<div class="edit"><div><video id="eVid" src="${c.mp4}" controls autoplay playsinline></video></div><div>
     <h2>Modifier le clip</h2>
     <div class="field"><span class="l">Titre (emojis acceptés)</span><input type="text" id="eTitre" value="${esc(c.titre)}"></div>
@@ -155,17 +166,58 @@ async function editClip(id) {
     <div class="field"><span class="l">Mots affichés à la fois</span><select id="eMots"><option value="1">1 (mot par mot)</option><option value="2">2</option><option value="3">3</option></select></div>
     <div class="field"><span class="l">Sous-titres (corrige un mot, vide-le pour l'enlever ; les temps restent les mêmes)</span>
       <div class="words">${c.words.map((w, i) => `<input data-i="${i}" value="${esc(w.text)}" size="${Math.max(3, w.text.length)}" title="${w.start.toFixed(1)} s">`).join("")}</div></div>
+    <div class="field"><span class="l">Cadrage : ${NOMS[cad.type] || "automatique"}</span>
+      <div class="row" id="eCad"><button data-c="main">✏️ Tracer la webcam</button><button data-c="jeu">Pas de webcam</button><button data-c="auto">Détection automatique</button></div>
+      <div id="eDraw" class="draw hidden"><img id="eFrame" draggable="false" alt=""><div id="eBox" class="rect hidden"></div></div>
+      <p class="hint" id="eCadMsg" style="margin:6px 0 0"></p></div>
     <div class="row"><button class="primary" id="eSave"${c.section_ok ? "" : " disabled title=\"l'extrait source a été supprimé\""}>Mettre à jour l'aperçu</button>
       <a href="/download/${encodeURIComponent(id)}"><button class="yellow">⬇ Télécharger le MP4</button></a>
-      <button id="eDel">Supprimer</button>${c.lien ? `<a href="${esc(c.lien)}" target="_blank" style="color:var(--muted);font-size:13px">voir dans le stream</a>` : ""}</div>
+      <button id="eDel">Supprimer</button>${c.lien ? `<a href="${esc(c.lien)}" target="_blank" style="color:var(--muted);font-size:13px">voir sur Twitch</a>` : ""}</div>
     <p class="hint" id="eMsg" style="margin-top:10px"></p></div></div>`);
   $("#eMots").value = String(mots || 2);
-  bindPicker($("#modalBox"), (s) => { style = s; });
+  bindPicker($(".styles", $("#modalBox")), (s) => { style = s; });
+
+  // --- cadrage : trois boutons ; « tracer » montre l'image d'origine, on y dessine le cadre de la webcam
+  const draw = $("#eDraw"), img = $("#eFrame"), box = $("#eBox"), msg = $("#eCadMsg");
+  const showBox = () => {
+    if (!cam || !img.naturalWidth || !cad.l) { box.classList.add("hidden"); return; }
+    const k = img.clientWidth / cad.l;
+    Object.assign(box.style, { left: cam[0] * k + "px", top: cam[1] * k + "px", width: cam[2] * k + "px", height: cam[3] * k + "px" });
+    box.classList.remove("hidden");
+  };
+  $$("#eCad button").forEach((b) => b.onclick = () => {
+    if (!c.section_ok) { msg.textContent = "L'extrait source a été supprimé : le cadrage ne peut plus changer."; return; }
+    cadrage = b.dataset.c;
+    $$("#eCad button").forEach((x) => x.classList.toggle("primary", x === b));
+    draw.classList.toggle("hidden", cadrage !== "main");
+    if (cadrage === "main") {
+      cam = cad.type === "split" && cad.cam ? cad.cam.map(Number) : null;
+      img.onload = () => { showBox(); draw.scrollIntoView({ block: "nearest", behavior: "smooth" }); };
+      img.src = "/frame/" + encodeURIComponent(id);
+      msg.textContent = "Clique et glisse pour entourer la webcam du streameur, puis « Mettre à jour l'aperçu ».";
+    } else msg.textContent = cadrage === "jeu" ? "Le jeu sera au centre, sur un fond flouté." : "La webcam sera recherchée de nouveau.";
+  });
+  let from = null;
+  const at = (e) => { const r = img.getBoundingClientRect(); return [Math.min(Math.max(e.clientX - r.left, 0), r.width), Math.min(Math.max(e.clientY - r.top, 0), r.height)]; };
+  draw.onpointerdown = (e) => { if (!cad.l) return; from = at(e); draw.setPointerCapture(e.pointerId); e.preventDefault(); };
+  draw.onpointermove = (e) => {
+    if (!from) return;
+    const [x, y] = at(e), k = cad.l / img.clientWidth;
+    cam = [Math.min(from[0], x) * k, Math.min(from[1], y) * k, Math.abs(x - from[0]) * k, Math.abs(y - from[1]) * k].map(Math.round);
+    showBox();
+  };
+  draw.onpointerup = () => { from = null; if (cam && (cam[2] < 60 || cam[3] < 40)) { cam = null; showBox(); msg.textContent = "Cadre trop petit : recommence en entourant toute la webcam."; } };
+
   $("#eSave").onclick = async () => {
+    if (cadrage === "main" && !cam) { msg.textContent = "Trace d'abord le cadre de la webcam sur l'image."; return; }
     const words = c.words.map((w, i) => ({ ...w, text: $(`.words input[data-i="${i}"]`).value }));
     $("#eSave").disabled = true; $("#eMsg").innerHTML = '<span class="spin"></span> Nouveau rendu…';
-    const job = await api("/api/jobs", { type: "rerender", id, titre: $("#eTitre").value, words, style, mots: +$("#eMots").value });
-    track(job, (j) => { if (j.status === "fini") editClip(id); else { $("#eMsg").textContent = "Erreur : " + j.error; $("#eSave").disabled = false; } });
+    const body = { type: "rerender", id, titre: $("#eTitre").value, words, style, mots: +$("#eMots").value };
+    if (cadrage === "main") body.cam = cam; else if (cadrage) body.mise_en_page = cadrage;
+    try {
+      const job = await api("/api/jobs", body);
+      track(job, (j) => { if (j.status === "fini") editClip(id); else { $("#eMsg").textContent = "Erreur : " + j.error; $("#eSave").disabled = false; } });
+    } catch (e) { $("#eMsg").textContent = "Erreur : " + e.message; $("#eSave").disabled = false; }
   };
   $("#eDel").onclick = async () => { if (!confirm("Supprimer ce clip ?")) return; await api(`/api/clip/${encodeURIComponent(id)}/supprimer`, {}); closeModal(); loadLibrary(); };
 }

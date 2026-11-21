@@ -55,9 +55,9 @@ TITRES = {
 
 
 def display_name(name: str) -> str:
-    """« KaiCenat » → « Kai Cenat », « jolavanille » → « Jolavanille », « xQc » reste « xQc »"""
+    """« KaiCenat » → « Kai Cenat », « jolavanille » → « Jolavanille » ; « xQc », « IShowSpeed » restent tels quels"""
     name = re.sub(r"[_]+", " ", name).strip()
-    parts = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name).split()
+    parts = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", name).split()
     if len(parts) > 1 and all(len(p) >= 3 for p in parts):
         return " ".join(p[:1].upper() + p[1:] for p in parts)
     return name[:1].upper() + name[1:] if name.islower() else name
@@ -79,16 +79,24 @@ def _ts(t: float) -> str:
 
 
 def clean_word(w: str) -> str:
-    w = re.sub(r"[^\w'?!\-%$€]", "", w.upper(), flags=re.UNICODE)
+    # la virgule ou le point d'un nombre restent (« 4,4 », « 3.5 »)
+    w = re.sub(r"(?<=[0-9])[.,](?=[0-9])", lambda m: "§" if m.group() == "," else "¤", w.upper())
+    w = re.sub(r"[^\w'?!\-%$€§¤]", "", w, flags=re.UNICODE).replace("§", ",").replace("¤", ".")
     return w.strip("-")
 
 
 def merge_elisions(words: list[Word]) -> list[Word]:
-    """Whisper coupe « c'est » en « c' » + « est » (ou « c » + « 'est ») : on recolle"""
+    """Whisper coupe « c'est » en « c' » + « est » (ou « c » + « 'est »), « vas-y » en « vas » + « -y »,
+    « 4,4 » en « 4 » + « ,4 » : on recolle"""
     out: list[Word] = []
     for w in words:
         t = w.text.strip().replace("’", "'")
-        if out and (t.startswith("'") or out[-1].text.endswith("'")):
+        if not t:
+            continue
+        glue = bool(out) and (t.startswith("'") or out[-1].text.endswith("'")
+                              or (t[0] == "-" and len(t) > 1 and t[1].isalnum())
+                              or (re.match(r"[,.]\d", t) is not None and out[-1].text[-1:].isdigit()))
+        if glue:
             p = out[-1]
             out[-1] = Word(p.start, w.end, p.text + t)
         else:
@@ -126,17 +134,21 @@ def _rrect(w: float, h: float, r: float) -> str:
     return " ".join(c[0] + " " + " ".join(str(int(round(v))) for v in c[1:]) for c in p)
 
 
+MAX_LINE = 980  # largeur maximale d'une ligne de sous-titres (la vidéo fait 1080)
+
+
 def build_ass(path: Path, words: list[Word], clip_dur: float, y: int, max_words: int = 2,
               highlight: str = DEFAULT_STYLE, em: int = 60):
     F = int(round(em * WIN_RATIO))
     font = ImageFont.truetype(str(SUB_FONT_FILE), em)
-    space = font.getlength(" ")
-    cap = em * 0.70
-    padx, pady = em * 0.22, em * 0.26
-    box_h = cap + 2 * pady
     spec = style_spec(highlight)
     ass_box = _ass(spec["boite"]) if spec["boite"] else None
     c_text, c_word = _ass(spec["texte"]), _ass(spec["mot"])
+    # l'écart entre deux mots : plus large qu'une espace normale, pour que le mot qui grossit (ou sa boîte)
+    # ne vienne jamais toucher son voisin
+    gap = em * (0.56 if ass_box else 0.44)
+    cap = em * 0.70
+    padx, pady = em * 0.22, em * 0.26
     head = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {OUT_W}
@@ -154,17 +166,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     ev = []
     gs = groups([w for w in words if w.start < clip_dur], max_words=max_words)
-    pop = "\\t(0,70,\\fscx114\\fscy114)\\t(70,150,\\fscx100\\fscy100)"
     for k, g in enumerate(gs):
         g_end = min(clip_dur, g[-1].end + 0.5)
         if k + 1 < len(gs):  # jamais deux groupes à l'écran en même temps
             g_end = min(g_end, gs[k + 1][0].start - 0.03)
         widths = [font.getlength(x.text) for x in g]
-        total = sum(widths) + space * (len(g) - 1)
+        total = sum(widths) + gap * (len(g) - 1)
+        fit = min(1.0, MAX_LINE / total)  # un mot (ou un groupe) trop long est réduit pour tenir dans l'image
+        widths, sp = [wd * fit for wd in widths], gap * fit
+        total = sum(widths) + sp * (len(g) - 1)
         centers, x = [], OUT_W / 2 - total / 2
         for wd in widths:
             centers.append(x + wd / 2)
-            x += wd + space
+            x += wd + sp
+        base = f"\\fscx{fit * 100:.0f}\\fscy{fit * 100:.0f}" if fit < 1.0 else ""
+        box_h = (cap + 2 * pady) * fit
         for i, w in enumerate(g):
             st = w.start - (0.04 if i == 0 else 0)
             en = g[i + 1].start if i + 1 < len(g) else g_end
@@ -173,16 +189,23 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             for j, x2 in enumerate(g):
                 active = j == i
                 tags = f"\\an5\\pos({centers[j]:.0f},{y})"
+                # le mot dit grossit un instant : au plus 14 %, et jamais plus d'un tiers de l'écart de chaque côté
+                room = sp * 0.35 - (padx * fit if ass_box else 0.0) if len(g) > 1 else 40.0
+                up = fit * (1 + max(0.02, min(0.14, 2 * room / max(widths[j], 1.0))))
+                pop = (f"\\t(0,70,\\fscx{up * 100:.0f}\\fscy{up * 100:.0f})"
+                       f"\\t(70,150,\\fscx{fit * 100:.0f}\\fscy{fit * 100:.0f})")
                 if active and ass_box:
-                    ev.append(f"Dialogue: 1,{_ts(st)},{_ts(en)},Boite,,0,0,0,,{{{tags}\\1c{ass_box}\\p1{pop}}}"
-                              f"{_rrect(widths[j] + 2 * padx, box_h, box_h * 0.3)}{{\\p0}}")
+                    grow = (f"\\t(0,70,\\fscx{up / fit * 100:.0f}\\fscy{up / fit * 100:.0f})"
+                            f"\\t(70,150,\\fscx100\\fscy100)")  # la boîte est déjà dessinée à sa taille
+                    ev.append(f"Dialogue: 1,{_ts(st)},{_ts(en)},Boite,,0,0,0,,{{{tags}\\1c{ass_box}\\p1{grow}}}"
+                              f"{_rrect(widths[j] + 2 * padx * fit, box_h, box_h * 0.3)}{{\\p0}}")
                     bord = "\\bord0" if spec["mot"] == "111111" else "\\bord3"
-                    ev.append(f"Dialogue: 2,{_ts(st)},{_ts(en)},Mot,,0,0,0,,{{{tags}\\1c{c_word}{bord}\\shad0{pop}}}"
+                    ev.append(f"Dialogue: 2,{_ts(st)},{_ts(en)},Mot,,0,0,0,,{{{tags}{base}\\1c{c_word}{bord}\\shad0{pop}}}"
                               f"{x2.text}")
                 elif active:
-                    ev.append(f"Dialogue: 2,{_ts(st)},{_ts(en)},Mot,,0,0,0,,{{{tags}\\1c{c_word}{pop}}}{x2.text}")
+                    ev.append(f"Dialogue: 2,{_ts(st)},{_ts(en)},Mot,,0,0,0,,{{{tags}{base}\\1c{c_word}{pop}}}{x2.text}")
                 else:
-                    ev.append(f"Dialogue: 2,{_ts(st)},{_ts(en)},Mot,,0,0,0,,{{{tags}\\1c{c_text}}}{x2.text}")
+                    ev.append(f"Dialogue: 2,{_ts(st)},{_ts(en)},Mot,,0,0,0,,{{{tags}{base}\\1c{c_text}}}{x2.text}")
     path.write_text(head + "\n".join(ev) + "\n", encoding="utf-8")
 
 
@@ -213,8 +236,10 @@ def filter_graph(L: Layout, sep: int, title_xy: tuple[int, int] | None) -> str:
         cx, cy, cw, ch = L.cam
         g = f"[0:v]crop={cw}:{ch}:{cx}:{cy},scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1[s1];"
     else:
-        g = (f"[0:v]split=2[a][b];[a]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,"
-             f"crop={OUT_W}:{OUT_H},boxblur=24:2,eq=brightness=-0.08[bg];[b]scale={OUT_W}:-2[fg];"
+        # le fond flouté se calcule en petit (un quart de la taille) puis s'agrandit : même image, bien plus vite
+        g = (f"[0:v]split=2[a][b];[a]scale={OUT_W // 4}:{OUT_H // 4}:force_original_aspect_ratio=increase"
+             f":flags=bilinear,crop={OUT_W // 4}:{OUT_H // 4},boxblur=6:2,scale={OUT_W}:{OUT_H}:flags=bilinear,"
+             f"eq=brightness=-0.08[bg];[b]scale={OUT_W}:-2:flags=lanczos[fg];"
              f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[s1];")
     if title_xy:
         g += f"[s1][1:v]overlay=x={title_xy[0]}:y={title_xy[1]}:eof_action=repeat:format=auto[s2];"

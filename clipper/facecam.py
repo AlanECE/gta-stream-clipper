@@ -37,12 +37,19 @@ class Layout:
         return asdict(self)
 
 
-def sample_frames(video, n=14):
+def sample_frames(video, n=14, t0=None, dur=None):
+    """n images réparties sur l'extrait, ou seulement sur la plage [t0, t0 + dur] (celle du clip)"""
     cap = cv2.VideoCapture(str(video))
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+    a, b = 0, total
+    if t0 is not None and dur:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        a2, b2 = int(max(0.0, t0) * fps), int((max(0.0, t0) + dur) * fps)
+        if min(b2, total) - a2 >= n:
+            a, b = a2, min(b2, total)
     frames = []
     for i in range(n):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int((i + 0.5) * total / n))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, a + int((i + 0.5) * (b - a) / n))
         ok, f = cap.read()
         if ok:
             frames.append(f)
@@ -61,8 +68,9 @@ def faces(frame, det):
     return [(x / s, y / s, fw / s, fh / s, float(sc)) for x, y, fw, fh, *_, sc in f]
 
 
-def stable_face(frames, det):
-    """le visage qui reste au même endroit sur la plupart des images"""
+def stable_faces(frames, det) -> list:
+    """les visages qui restent au même endroit : [(visage, part des images où il est là)], du plus présent au moins
+    présent. Plusieurs candidats : la webcam, mais aussi un personnage du jeu ou un dessin posé sur le stream."""
     W = frames[0].shape[1]
     clusters = []  # [cx, cy, liste de boîtes, ensemble d'images]
     for i, fr in enumerate(frames):
@@ -75,12 +83,11 @@ def stable_face(frames, det):
                     break
             else:
                 clusters.append([cx, cy, [(x, y, w, h)], {i}])
-    if not clusters:
-        return None
-    best = max(clusters, key=lambda c: len(c[3]))
-    if len(best[3]) < max(3, 0.4 * len(frames)):
-        return None
-    return tuple(float(np.median([b[k] for b in best[2]])) for k in range(4))
+    out = []
+    for c in sorted(clusters, key=lambda c: -len(c[3])):
+        if len(c[3]) >= max(3, 0.3 * len(frames)):
+            out.append((tuple(float(np.median([b[k] for b in c[2]])) for k in range(4)), len(c[3]) / len(frames)))
+    return out
 
 
 def calm_box(frames, face):
@@ -104,15 +111,19 @@ def calm_box(frames, face):
     return box
 
 
-def refine(frames, box, face):
+def measure(frames) -> tuple:
+    """ce qui bouge (écart-type) et les lignes nettes (contours de l'image médiane), une fois pour toutes"""
+    gray = np.stack([cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in frames]).astype(np.float32)
+    med = np.median(gray[::2], axis=0)
+    return (gray.std(0), np.abs(cv2.Sobel(med, cv2.CV_32F, 1, 0, ksize=3)),
+            np.abs(cv2.Sobel(med, cv2.CV_32F, 0, 1, ksize=3)))
+
+
+def refine(frames, box, face, measured=None):
     """cale chaque côté du cadre sur une vraie bordure : une ligne nette, continue sur toute la hauteur (ou largeur)
     de la webcam, qui reste en place pendant que le jeu bouge"""
     H, W = frames[0].shape[:2]
-    gray = np.stack([cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in frames]).astype(np.float32)
-    med = np.median(gray[::2], axis=0)
-    std = gray.std(0)
-    gx = np.abs(cv2.Sobel(med, cv2.CV_32F, 1, 0, ksize=3))
-    gy = np.abs(cv2.Sobel(med, cv2.CV_32F, 0, 1, ksize=3))
+    std, gx, gy = measured or measure(frames)
     x, y, w, h = box
     fx, fy, fw, fh = face
     thr = 40
@@ -239,14 +250,19 @@ def game_crop(W, H, aspect, cam):
         ch = H * scale
         cw = min(W, ch * aspect)
         ch = cw / aspect
-        for fx in np.linspace(0, 1, 21):
-            for fy in np.linspace(0, 1, 9):
-                x, y = (W - cw) * fx, (H - ch) * fy
+        xs, ys = list(np.linspace(0, W - cw, 21)), list(np.linspace(0, H - ch, 9))
+        if cam:  # et les positions collées à la webcam : juste à côté, sans un pixel d'elle
+            bx, by, bw, bh = cam
+            xs += [v for v in (bx + bw, bx - cw) if 0 <= v <= W - cw]
+            ys += [v for v in (by + bh, by - ch) if 0 <= v <= H - ch]
+        for x in xs:
+            for y in ys:
                 cand = (x, y, cw, ch)
-                if cam and overlap(cand, cam) > 0.02 * cw * ch:
+                ov = overlap(cand, cam) / (cw * ch) if cam else 0.0
+                if ov > 0.02:
                     continue
                 d = abs(x + cw / 2 - W / 2) / W + abs(y + ch / 2 - H / 2) / H
-                key = (-scale, d)
+                key = (-scale, d + 6 * ov)  # un petit décalage vaut mieux qu'une bande de webcam dans le jeu
                 if best is None or key < best[0]:
                     best = (key, cand)
         if best:
@@ -258,30 +274,50 @@ def game_crop(W, H, aspect, cam):
     return (even(x), even(y), even(cw), even(ch))
 
 
-def detect(video, forced_cam=None) -> Layout:
-    frames = sample_frames(video)
+SURE = 2.85      # au-dessus : une vraie bordure de webcam a été trouvée
+PRESENT = 0.7    # en dessous : il faut que le visage soit là sur presque toutes les images pour y croire
+
+
+def detect(video, forced_cam=None, t0=None, dur=None) -> Layout:
+    """`t0`, `dur` : la plage du clip dans l'extrait (la mise en page peut changer juste avant ou juste après)"""
+    frames = sample_frames(video, t0=t0, dur=dur)
     H, W = frames[0].shape[:2]
     det = cv2.FaceDetectorYN.create(str(YUNET), "", (320, 320), 0.75, 0.3, 50)
-    face = stable_face(frames, det)
+    found = stable_faces(frames, det)
     conf = 9.0
     if forced_cam:
         box = tuple(float(v) for v in forced_cam)
-        face = face or (box[0] + box[2] * 0.35, box[1] + box[3] * 0.2, box[2] * 0.3, box[3] * 0.35)
-    elif face is None:
+        inside = [f for f, _ in found if box[0] <= f[0] + f[2] / 2 <= box[0] + box[2]
+                  and box[1] <= f[1] + f[3] / 2 <= box[1] + box[3]]
+        face = inside[0] if inside else (box[0] + box[2] * 0.35, box[1] + box[3] * 0.2, box[2] * 0.3, box[3] * 0.35)
+    elif not found:
         log("pas de webcam trouvée : le jeu au centre, fond flouté")
         return Layout("jeu", W, H, seam_y=1420)
     else:
+        face, presence = found[0]
         if face[3] > 0.2 * H:
             log("streameur en plein écran : recadrage vertical sur lui")
             cx = face[0] + face[2] / 2
             cw = H * OUT_W / OUT_H
             x0 = min(max(cx - cw / 2, 0), W - cw)
             return Layout("plein", W, H, cam=(even(x0), 0, even(cw), even(H)), seam_y=1380)
-        box = calm_box(frames, face) or face_box(face, W, H)
-        box, conf = refine(frames, box, face)
-        if conf < 2.85:  # pas de vraie bordure autour du visage : c'est un personnage du jeu, pas une webcam
-            log(f"visage sans cadre de webcam autour (confiance {conf:.1f}) : le jeu au centre, fond flouté")
-            return Layout("jeu", W, H, seam_y=1420)
+        # chaque visage stable est essayé : la webcam est celui qui a un vrai cadre autour de lui
+        measured, tries = measure(frames), []
+        for f, pres in found[:3]:
+            if f[3] > 0.2 * H:
+                continue
+            around = calm_box(frames, f) or face_box(f, W, H)
+            b, c = refine(frames, around, f, measured)
+            tries.append((c, b, f, pres, around))
+        conf, box, face, presence, around = max(tries, key=lambda t: t[0])
+        if conf < SURE:
+            conf, box, face, presence, around = tries[0]  # pas de cadre net : on s'en remet au visage le plus présent
+            if presence < PRESENT:  # un visage de passage, sans cadre autour : un personnage du jeu
+                log(f"visage sans cadre de webcam autour (confiance {conf:.1f}) : le jeu au centre, fond flouté")
+                return Layout("jeu", W, H, seam_y=1420)
+            # webcam sans bordure (détourée, ou sombre sur un jeu sombre) : on cadre autour du visage
+            box = face_box(face, W, H)
+            log(f"webcam sans bordure nette (visage présent sur {presence:.0%} des images) : cadrage autour du visage")
     L = split_layout(W, H, box, face, conf)
     log(f"webcam trouvée : {int(box[2])}x{int(box[3])} à ({int(box[0])}, {int(box[1])}) → haut {L.top_h} px, "
         f"jeu {OUT_H - L.top_h} px")

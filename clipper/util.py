@@ -6,15 +6,13 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import unicodedata
 from pathlib import Path
 
 PKG = Path(__file__).resolve().parent
 ASSETS = PKG / "assets"
 YUNET = ASSETS / "models" / "face_detection_yunet_2023mar.onnx"
-
-
-import threading
 
 _tls = threading.local()  # l'interface graphique y range la tâche en cours pour en afficher le journal
 
@@ -30,6 +28,16 @@ def log(*parts):
         job.lines.append(msg)
 
 
+def same_job(fn):
+    """pour lancer `fn` dans un autre fil sans perdre le journal du travail en cours (interface graphique)"""
+    job = getattr(_tls, "job", None)
+
+    def wrap(*a, **k):
+        _tls.job = job
+        return fn(*a, **k)
+    return wrap
+
+
 def need(*tools):
     for tool in tools:
         if not shutil.which(tool):
@@ -43,6 +51,24 @@ def run(cmd, cwd=None, check=True):
     if check and r.returncode != 0:
         raise RuntimeError(f"la commande a échoué : {' '.join(map(str, cmd[:5]))} …\n{(r.stderr or '')[-1500:]}")
     return r
+
+
+def why(e: Exception) -> str:
+    """la raison d'un échec en une phrase (yt-dlp et ffmpeg sont bavards)"""
+    txt = str(e)
+    low = txt.lower()
+    if "subscriber-only" in low or "must be logged" in low:
+        return "réservé aux abonnés de la chaîne"
+    if "does not exist" in low or "404" in low or "not found" in low:
+        return "supprimé ou introuvable"
+    if "private" in low:
+        return "privé"
+    if "offline" in low or "not currently live" in low:
+        return "la chaîne n'est pas en direct"
+    for ln in reversed(txt.splitlines()):
+        if "ERROR" in ln:
+            return ln.split("ERROR:")[-1].strip()[:160]
+    return (txt.strip().splitlines() or ["erreur inconnue"])[-1][:160]
 
 
 def ytdlp(*args, check=True):

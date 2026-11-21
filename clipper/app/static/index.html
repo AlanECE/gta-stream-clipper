@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GTA Stream Clipper</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%279%27 fill=%27%238b5cf6%27/%3E%3Cpath d=%27M12 9l12 7-12 7z%27 fill=%27%23fff%27/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -50,14 +51,15 @@
   <!-- LIVE -->
   <section id="tab-live" class="tab">
     <h1>En direct</h1>
-    <p class="lead">Choisis un live : l'outil le regarde et sort un clip environ une minute après chaque moment fort. Les clips arrivent dans la bibliothèque.</p>
+    <p class="lead">Choisis un live : l'outil le regarde et sort un clip environ une minute après chaque moment fort. Les clips arrivent dans la bibliothèque. Avec la veille, il attend le prochain live d'une chaîne.</p>
     <div class="filters">
       <label>Langue <select id="dLangue" class="langs"></select></label>
       <label>Jeu <input id="dJeu" value="Grand Theft Auto VI"></label>
       <button id="dGo" class="primary">Voir les lives</button>
       <span class="sep"></span>
       <label class="grow">Ou un pseudo / lien <input id="dUrl" placeholder="kaicenat, kick.com/jolavanille…"></label>
-      <label>Minutes <input id="dMin" value="120" size="4"></label>
+      <label>Minutes (0 = sans limite) <input id="dMin" value="120" size="4"></label>
+      <label class="check" title="Attend que la chaîne passe en direct, clippe, puis attend son live suivant. Fait pour un serveur allumé jour et nuit."><span>Veille</span><input type="checkbox" id="dVeille"></label>
       <button id="dWatch">Surveiller</button>
     </div>
     <div id="dRes" class="grid"></div>

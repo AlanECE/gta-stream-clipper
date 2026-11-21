@@ -4,12 +4,13 @@ from __future__ import annotations
 import datetime as dt
 import json
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
 from . import analyze, chat, facecam, render, source, transcribe
 from .analyze import Moment, Word
-from .util import hms, log, parse_time, slug, twitch_t
+from .util import hms, log, parse_time, same_job, slug, twitch_t, video_info, why
 
 MAX_FULL = 10 * 3600  # au-delà, on n'analyse que les 10 premières heures (sauf --de / --a)
 
@@ -77,7 +78,7 @@ def clip_stream(url: str, opts) -> list[Path]:
     if getattr(opts, "analyse", False):
         print(f"\nMoments candidats (du plus fort au plus faible) : {work / 'moments.json'}")
         for i, m in enumerate(moments, 1):
-            print(f"  {i}. {hms(start + m.start)} · score {m.score:.2f} · « {m.text_in[:110]} »")
+            print(f"  {i}. {hms(start + m.start)} · score {m.score:.2f} · « {said(m)[:110]} »")
         print("\nPour clipper ceux que tu veux : la même commande avec --choix 1,3")
         return []
     titles: dict[int, str] = {}
@@ -92,20 +93,22 @@ def clip_stream(url: str, opts) -> list[Path]:
 
     # les extraits vidéo, puis la webcam (le même cadre pour tout le stream)
     keep.sort(key=lambda m: m.start)
-    sections, layouts = [], []
+    sections, layouts, leads = [], [], []
     for n, m in enumerate(keep, 1):
         t0 = start + m.start
+        lead = min(1.0, t0)  # une seconde de marge avant le moment (moins s'il est tout au début du stream)
         section = work / f"section_{int(t0)}.mp4"
         log(f"extrait {n}/{len(keep)} : {hms(t0)} → {hms(start + m.end)} ({m.end - m.start:.0f} s)")
         if not section.exists():
-            source.grab(url, section, t0 - 1.0, m.end - m.start + 2.0)
+            source.grab(url, section, t0 - lead, m.end - m.start + lead + 1.0)
         sections.append(section)
-        layouts.append(facecam.detect(section, opts.cam))
+        leads.append(lead)
+        layouts.append(facecam.detect(section, opts.cam, lead, m.end - m.start))
     layouts = facecam.consensus(layouts)
 
     made = []
     day = dt.date.today().strftime("%Y%m%d")
-    for n, (m, section, layout) in enumerate(zip(keep, sections, layouts), 1):
+    for n, (m, section, layout, lead) in enumerate(zip(keep, sections, layouts, leads), 1):
         t0 = start + m.start
         dur = m.end - m.start
         words = _words_in(m.words, m.start, m.end, m.start)
@@ -118,16 +121,19 @@ def clip_stream(url: str, opts) -> list[Path]:
         elif plat == "youtube":
             link = f"{url}{'&' if '?' in url else '?'}t={int(t0)}"
         base = f"{slug(streamer, 30)}_{day}_{int(t0)}"
-        made.append(write_clip(opts, out_dir, base, section, layout, words, 1.0, dur, title, streamer,
+        made.append(write_clip(opts, out_dir, base, section, layout, words, lead, dur, title, streamer,
                                {"source": url, "source_link": link, "debut_stream": t0, "score": m.score}))
     if not opts.garder:
-        for f in work.glob("audio_*.ogg"):
+        for f in [*work.glob("audio_*.wav"), *work.glob("audio_*.ogg")]:
             f.unlink(missing_ok=True)
     return made
 
 
 def find_moments(url, inf, plat, work: Path, start, end, full, opts) -> list[Moment]:
-    """son + chat → pics de hype → chaque pic transcrit et noté. Gardé en cache pour relancer sans tout refaire."""
+    """son + chat → pics de hype → chaque pic transcrit et noté. Gardé en cache pour relancer sans tout refaire.
+
+    Ce qui attend le réseau tourne en même temps : le chat pendant que le son se télécharge, les images du jeu
+    (repérage des cinématiques) pendant que les paroles sont transcrites."""
     pre, post = opts.duree * 0.72, opts.duree * 0.28
     cache = work / f"candidats_{int(start)}_{int(end)}_{int(opts.duree)}.json"
     if cache.exists():
@@ -135,48 +141,62 @@ def find_moments(url, inf, plat, work: Path, start, end, full, opts) -> list[Mom
         data = json.loads(cache.read_text(encoding="utf-8"))
         return [Moment(d["peak"], d["start"], d["end"], d["hype"], d["bonus"], [Word(**w) for w in d["words"]],
                        d["lang"], d.get("cutscene", False)) for d in data]
-    audio = source.get_audio(url, work, start, end, full)
-    loud = analyze.loudness(audio)
-    rate = None if getattr(opts, "sans_chat", False) else chat.for_vod(url, inf, start, start + len(loud), work, plat)
-    log(f"son analysé ({hms(len(loud))})" + (" + chat" if rate is not None else ", sans chat"))
-    score = analyze.hype(loud, rate)
-    cands = analyze.peaks(score, k=max(opts.nb * 4, 8), min_gap=int(opts.duree * 1.5), margin=int(pre) + 2)
-    if not cands:
-        raise SystemExit("aucun moment fort trouvé sur cette plage")
-    transcribe.load(opts.modele)
-    moments: list[Moment] = []
-    for i, (p, s) in enumerate(cands, 1):
-        a0, a1 = max(0.0, p - pre - 6), min(float(len(loud)), p + post + 6)
-        wav = analyze.slice_wav(audio, a0, a1 - a0, work / f"cand_{p}.wav")
-        ws, lang = transcribe.words(wav, opts.langue)
-        wav.unlink(missing_ok=True)
-        ws = [Word(w.start + a0, w.end + a0, w.text) for w in ws]
-        st, en = analyze.snap(ws, p, pre, post, a0, a1)
-        inside = [w for w in ws if st - 0.05 <= w.start and w.end <= en + 0.3]
-        moments.append(Moment(p, st, en, s, analyze.text_bonus(inside, en - st), ws, lang))
-    # cinématiques : quelques images basse définition de chaque candidat
-    low = source.low_video_url(url)
-    if low:
-        from concurrent.futures import ThreadPoolExecutor
+    ex = ThreadPoolExecutor(13)
+    try:
+        chat_job = None if getattr(opts, "sans_chat", False) else \
+            ex.submit(same_job(chat.for_vod), url, inf, start, end, work, plat)
+        low_job = ex.submit(source.low_video_url, url)
+        audio = source.get_audio(url, work, start, end)
+        loud = analyze.loudness(audio)
+        rate = chat_job.result() if chat_job else None
+        log(f"son analysé ({hms(len(loud))})" + (" + chat" if rate is not None else ", sans chat"))
+        score = analyze.hype(loud, rate)
+        cands = analyze.peaks(score, k=max(opts.nb * 4, 8), min_gap=int(opts.duree * 1.5), margin=int(pre) + 2)
+        if not cands:
+            raise SystemExit("aucun moment fort trouvé sur cette plage")
 
-        def look(m):
-            d = m.end - m.start
-            return analyze.letterboxed(source.frames_at(low, [start + m.start + d * k for k in (0.2, 0.5, 0.8)]))
-        with ThreadPoolExecutor(6) as ex:
-            for m, cut in zip(moments, ex.map(look, moments)):
-                m.cutscene = cut
+        def look(p) -> bool:  # cinématique ? quelques images basse définition autour du pic
+            low = low_job.result()
+            return bool(low) and analyze.letterboxed(source.frames_span(low, start + p - pre, pre + post))
+        looks = [ex.submit(look, p) for p, _ in cands]
+        transcribe.load(opts.modele)
+        moments: list[Moment] = []
+        for p, sc in cands:
+            a0, a1 = max(0.0, p - pre - 6), min(float(len(loud)), p + post + 6)
+            wav = analyze.slice_wav(audio, a0, a1 - a0, work / f"cand_{p}.wav")
+            ws, lang = transcribe.words(wav, opts.langue)
+            wav.unlink(missing_ok=True)
+            ws = [Word(w.start + a0, w.end + a0, w.text) for w in ws]
+            st, en = analyze.snap(ws, p, pre, post, a0, a1)
+            inside = [w for w in ws if st - 0.05 <= w.start and w.end <= en + 0.3]
+            moments.append(Moment(p, st, en, sc, analyze.text_bonus(inside, en - st), ws, lang))
+        for m, job in zip(moments, looks):
+            try:
+                m.cutscene = job.result(timeout=150)
+            except Exception:  # noqa: BLE001 (le repérage des cinématiques est un plus : sans lui, on continue)
+                m.cutscene = False
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
     for i, m in enumerate(moments, 1):
         log(f"  candidat {i}/{len(moments)} à {hms(start + m.peak)} · score {m.score:.2f} (son+chat {m.hype:.2f}, "
-            f"paroles {m.bonus:+.2f}{', cinématique' if m.cutscene else ''}) · « {m.text_in[:70]} »")
+            f"paroles {m.bonus:+.2f}{', cinématique' if m.cutscene else ''}) · « {said(m)[:70]} »")
     cache.write_text(json.dumps([{**asdict(m), "words": [asdict(w) for w in m.words]} for m in moments],
                                 ensure_ascii=False), encoding="utf-8")
+    if not opts.garder:  # tout ce qu'il faut est dans le cache : le son (115 Mo par heure) peut partir
+        audio.unlink(missing_ok=True)
     return moments
+
+
+def said(m: Moment) -> str:
+    """ce qu'il dit pendant le moment, mots recollés (« c'est », « vas-y »)"""
+    inside = [w for w in m.words if m.start - 0.05 <= w.start and w.end <= m.end + 0.3]
+    return " ".join(w.text for w in render.merge_elisions(inside))
 
 
 def write_moments(work: Path, moments: list[Moment], start: float):
     (work / "moments.json").write_text(json.dumps(
         [{"n": i, "debut": hms(start + m.start), "fin": hms(start + m.end), "score": m.score,
-          "cinematique": m.cutscene, "texte": m.text_in} for i, m in enumerate(moments, 1)], ensure_ascii=False, indent=1), encoding="utf-8")
+          "cinematique": m.cutscene, "texte": said(m)} for i, m in enumerate(moments, 1)], ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def redo(json_path: str, opts) -> Path:
@@ -186,7 +206,7 @@ def redo(json_path: str, opts) -> Path:
         raise SystemExit("l'extrait source a été supprimé : relance la commande d'origine")
     L = facecam.Layout(**{k: tuple(v) if isinstance(v, list) else v for k, v in meta["layout"].items()})
     if opts.cam:
-        L = facecam.detect(section, opts.cam)
+        L = facecam.detect(section, opts.cam, meta["t_in"], meta["dur"])
     words = [Word(**w) for w in meta["words"]]
     title = render.fill_title(opts.titre, meta["streamer"], opts.jeu) if opts.titre else meta["title"]
     out = Path(json_path).with_suffix(".mp4")
@@ -212,14 +232,23 @@ def redo(json_path: str, opts) -> Path:
 
 
 def redo_with(json_path: str | Path, title: str | None = None, words: list[dict] | None = None,
-              style: str | None = None, mots: int | None = None, sub_y: float | None = None) -> Path:
-    """refaire un clip avec un titre, des sous-titres (mots aux mêmes temps) ou un style modifiés (interface)"""
+              style: str | None = None, mots: int | None = None, sub_y: float | None = None,
+              cam: list | None = None, mise_en_page: str | None = None) -> Path:
+    """refaire un clip avec un titre, des sous-titres (mots aux mêmes temps), un style ou un cadrage modifiés
+    (interface). `cam` : cadre de la webcam tracé à la main (x, y, largeur, hauteur dans l'image source) ;
+    `mise_en_page` : « auto » (détection), « jeu » (pas de webcam : le jeu au centre)."""
     jp = Path(json_path)
     meta = json.loads(jp.read_text(encoding="utf-8"))
     section = Path(meta["section"])
     if not section.exists():
         raise RuntimeError("l'extrait source a été supprimé : il faut refaire le clip depuis le début")
     L = facecam.Layout(**{k: tuple(v) if isinstance(v, list) else v for k, v in meta["layout"].items()})
+    if cam:
+        L = facecam.detect(section, [float(v) for v in cam], meta["t_in"], meta["dur"])
+    elif mise_en_page == "jeu":
+        L = facecam.Layout("jeu", L.src_w, L.src_h, seam_y=1420)
+    elif mise_en_page == "auto":
+        L = facecam.detect(section, None, meta["t_in"], meta["dur"])
     if words is not None:
         meta["words"] = [{"start": float(w["start"]), "end": float(w["end"]), "text": str(w["text"]).strip()}
                          for w in words if str(w.get("text", "")).strip()]
@@ -233,6 +262,7 @@ def redo_with(json_path: str | Path, title: str | None = None, words: list[dict]
     if sub_y:
         st["sub_y"] = float(sub_y)
     meta["style"] = st
+    meta["layout"] = L.to_dict()
     render.render(section, jp.with_suffix(".mp4"), L, [Word(**w) for w in meta["words"]], meta["t_in"], meta["dur"],
                   meta["title"], meta.get("streamer", ""), **st)
     jp.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -245,55 +275,38 @@ def redo_with(json_path: str | Path, title: str | None = None, words: list[dict]
 
 
 def clip_from_viral(c: dict, opts, index: int = 0) -> Path:
-    """un clip viral (dict de viral.top_clips) → clip vertical. On repart de la rediffusion pour avoir quelques
-    secondes avant le moment ; si elle n'existe plus, on prend le clip Twitch lui-même."""
+    """un clip viral (dict de viral.top_clips) → clip vertical.
+
+    On part du clip Twitch lui-même : c'est le moment exact qui a buzzé, avec son vrai son. (La rediffusion, elle,
+    peut être réservée aux abonnés, supprimée, ou muette là où passait une musique protégée ; et la position que
+    Twitch donne pour y retrouver le clip tombe à la fin du clip, à quelques secondes près.)"""
     out_dir = Path(opts.sortie)
     work = out_dir / ".travail" / slug(f"viral-{c.get('login')}-{c.get('id')}", 70)
     work.mkdir(parents=True, exist_ok=True)
     streamer = c.get("streamer") or c.get("login") or "streamer"
-    d = float(c.get("duree") or 30)
-    section = work / "section.mp4"
-    info_f = work / "section.json"
-    if section.exists() and info_f.exists():
-        base = json.loads(info_f.read_text(encoding="utf-8"))
-    else:
-        base = None
-        if c.get("vod") and c.get("offset") is not None:
-            t0 = max(0.0, float(c["offset"]) - 6.0)
-            try:
-                log(f"« {c.get('titre', '')[:50]} » ({streamer}) : extrait de la rediffusion")
-                source.grab(c["vod"], section, t0, d + 10.0)
-                base = {"mode": "vod", "t0": t0}
-            except Exception as e:
-                log(f"rediffusion indisponible ({str(e)[:80]}) : on prend le clip Twitch")
-        if base is None:
-            source.grab(c["url"], section, 0.0, d + 1.0)
-            base = {"mode": "clip", "t0": 0.0}
-        info_f.write_text(json.dumps(base), encoding="utf-8")
-    from .util import video_info
-    sec_dur = video_info(section)[3]
-    if base["mode"] == "vod":
-        s0, s1 = float(c["offset"]) - base["t0"] - 2.0, float(c["offset"]) - base["t0"] + d + 2.5
-    else:
-        s0, s1 = 0.0, d
-    s0, s1 = max(0.0, s0), min(sec_dur - 0.05, s1)
+    section = work / "clip.mp4"
+    if not (section.exists() and section.stat().st_size > 50_000):
+        log(f"« {c.get('titre', '')[:50]} » ({streamer}) : téléchargement du clip")
+        try:
+            source.fetch(c["url"], section, float(c.get("duree") or 60))
+        except RuntimeError as e:
+            raise RuntimeError(f"clip indisponible : {why(e)}") from None
+    dur = video_info(section)[3] - 0.05
     lang = opts.langue or (c.get("langue") if c.get("langue") in ("fr", "en", "es", "de", "it", "pt") else None)
     transcribe.load(opts.modele)
-    wav = analyze.slice_wav(section, 0, sec_dur, work / "section.wav")
+    wav = analyze.slice_wav(section, 0, dur, work / "clip.wav")
     ws, lang = transcribe.words(wav, lang)
     wav.unlink(missing_ok=True)
-    for w in ws:  # pas de mot coupé au début ni à la fin
-        if w.start < s0 < w.end:
-            s0 = max(0.0, w.start - 0.1)
-        if w.start < s1 < w.end:
-            s1 = min(sec_dur - 0.05, w.end + 0.2)
-    layout = facecam.detect(section, opts.cam)
-    words = _words_in(ws, s0, s1, s0)
+    layout = facecam.detect(section, opts.cam, 0.0, dur)
+    words = _words_in(ws, 0.0, dur, 0.0)
     title = render.fill_title(opts.titre, streamer, opts.jeu) if opts.titre \
         else render.auto_title(streamer, opts.jeu, analyze.mood(words), index, opts.titre_langue)
     name = f"{slug(c.get('login') or streamer, 30)}_viral_{slug(c.get('id') or 'clip', 12)}"
-    return write_clip(opts, out_dir, name, section, layout, words, s0, s1 - s0, title, streamer,
-                      {"source": c.get("url"), "source_link": c.get("lien_vod") or c.get("url"), "viral": c})
+    out = write_clip(opts, out_dir, name, section, layout, words, 0.0, dur, title, streamer,
+                     {"source": c.get("url"), "source_link": c.get("url"), "viral": c})
+    for old in ("section.mp4", "section.json"):  # extrait de la version 1.2.0, remplacé par le clip lui-même
+        (work / old).unlink(missing_ok=True)
+    return out
 
 
 def clean_work(sortie: str):

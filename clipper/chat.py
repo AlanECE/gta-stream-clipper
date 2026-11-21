@@ -47,7 +47,7 @@ def twitch_vod_rate(video_id: str, start: float, end: float, step: int = 15) -> 
     rate = np.full(n, np.nan, dtype=np.float32)
     offsets = list(range(int(start), int(end), step))
     log(f"chat Twitch : {len(offsets)} points de mesure…")
-    with ThreadPoolExecutor(8) as ex:
+    with ThreadPoolExecutor(16) as ex:
         pages = list(ex.map(lambda o: (o, _twitch_page(video_id, o)), offsets))
     for o, offs in pages:
         if offs is None:
@@ -130,6 +130,13 @@ class TwitchLiveChat(threading.Thread):
                             self.times.append(now)
             except Exception:
                 time.sleep(3)
+
+    def forget(self, before: float):
+        """oublie les messages plus vieux que `before` (les temps sont rangés dans l'ordre)"""
+        import bisect
+        k = bisect.bisect_left(self.times, before)
+        if k:
+            del self.times[:k]
 
     def rate(self, t0: float, n: int) -> np.ndarray:
         counts = np.zeros(n, dtype=np.float32)

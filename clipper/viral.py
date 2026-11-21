@@ -1,7 +1,7 @@
 """Les moments viraux : les clips les plus vus sur Twitch (par jeu, par streameur, par langue), et les lives en cours.
 
 Aucune clé : c'est l'accès public du site Twitch (le même que yt-dlp). Les viewers ont déjà choisi les meilleurs
-moments ; on remonte chacun depuis la rediffusion, quelques secondes avant et après, dans le format vertical.
+moments ; on reprend chaque clip tel quel (le moment exact, avec son vrai son) et on le remet au format vertical.
 """
 from __future__ import annotations
 
@@ -31,13 +31,18 @@ def _q(s: str) -> str:
 
 def _clip(n: dict) -> dict:
     v = n.get("video") or {}
-    b = n.get("broadcaster") or {}
+    b_ = n.get("broadcaster") or {}
     off = n.get("videoOffsetSeconds")
+    dur = n.get("durationSeconds") or 30
+    # Twitch donne la position de la FIN du clip dans la rediffusion (à quelques secondes près) : le début est
+    # une durée de clip plus tôt. Mesuré en comparant le son de 22 clips à celui de leur rediffusion.
+    debut = max(0, int(off - dur) - 3) if off is not None else None
+    vod = f"https://www.twitch.tv/videos/{v['id']}" if v.get("id") else None
     return {"id": n.get("id"), "url": n.get("url"), "titre": n.get("title") or "", "vues": n.get("viewCount") or 0,
-            "date": n.get("createdAt"), "duree": n.get("durationSeconds") or 30, "langue": (n.get("language") or "").lower(),
-            "vignette": n.get("thumbnailURL"), "streamer": b.get("displayName") or b.get("login") or "?",
-            "login": b.get("login"), "vod": f"https://www.twitch.tv/videos/{v['id']}" if v.get("id") else None,
-            "offset": off, "lien_vod": f"https://www.twitch.tv/videos/{v['id']}?t={off}s" if v.get("id") and off is not None else None}
+            "date": n.get("createdAt"), "duree": dur, "langue": (n.get("language") or "").lower(),
+            "vignette": n.get("thumbnailURL"), "streamer": b_.get("displayName") or b_.get("login") or "?",
+            "login": b_.get("login"), "vod": vod, "offset": off,
+            "lien_vod": f"{vod}?t={debut}s" if vod and debut is not None else None}
 
 
 def _retry(fn):

@@ -25,7 +25,8 @@ python -m clipper viral --langue-clips fr --liste [--periode jour|semaine|mois] 
 python -m clipper viral --langue-clips fr --choix 1,3 --titres "Titre 1 😭|Titre 2 💀"
 ```
 Les viewers ont déjà choisi ces moments. Lis les titres des clips (souvent courts ou en argot), choisis ceux qui
-parlent de GTA, écris un titre français façon TikTok par clip (`--titres` dans l'ordre de `--choix`).
+parlent de GTA, écris un titre français façon TikTok par clip (`--titres` dans l'ordre de `--choix`). Le clip Twitch
+est repris tel quel (le moment exact, avec son vrai son) : pas besoin que la rediffusion existe encore.
 
 ## Mode 1 (un lien) : toujours en deux temps, c'est toi qui choisis
 
@@ -57,7 +58,7 @@ devant une vraie réaction. Ton travail, c'est de choisir.
 5. **Vérifie** : extrais une image de chaque clip (`ffmpeg -ss 3 -i clip.mp4 -frames:v 1 apercu.jpg`, puis une à
    ~10 s) et regarde-la. La webcam doit montrer le streameur (pas de bout de jeu ni de chat dedans), le titre et les
    sous-titres lisibles. Si le cadre de la webcam est faux : `python -m clipper refaire clips/<clip>.json --cam x,y,largeur,hauteur`
-   (pixels de la vidéo source).
+   (pixels de la vidéo source). Dans l'interface, l'utilisateur trace ce cadre à la souris dans l'éditeur du clip.
 
 6. **Donne** à l'utilisateur la liste des clips (chemins), et pour chacun le titre et la légende du `.txt`.
 
@@ -75,7 +76,8 @@ devant une vraie réaction. Ton travail, c'est de choisir.
 « En direct » de l'interface). Sur un serveur : `python -m clipper app --host 0.0.0.0 --mot-de-passe <mdp> --sans-navigateur`
 dans tmux, puis l'utilisateur lance les surveillances depuis son navigateur. Ça tourne longtemps : lance-le en arrière-plan et préviens
 l'utilisateur qu'un clip sort ~1 minute après chaque moment fort. Pas de choix manuel ici : `--seuil 1.3` pour être
-plus exigeant, `--seuil 0.8` pour plus de clips.
+plus exigeant, `--seuil 0.8` pour plus de clips. Pour rester branché sur une chaîne : `--veille --minutes 0` (il attend
+qu'elle passe en direct, clippe, puis attend son live suivant ; dans l'interface, la case « Veille »).
 
 ## Réglages du rendu
 

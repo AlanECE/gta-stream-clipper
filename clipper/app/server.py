@@ -8,13 +8,17 @@ from __future__ import annotations
 import argparse
 import base64
 import copy
+import hmac
 import json
 import mimetypes
 import re
+import shutil
+import socket
 import subprocess
 import threading
 import time
 import traceback
+import urllib.request
 import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,6 +30,17 @@ from ..util import ASSETS, _tls, log
 
 STATIC = Path(__file__).resolve().parent / "static"
 LANGS = ["fr", "en", "es", "de", "it", "pt"]
+JOBS_KEPT = 40      # travaux finis gardés en mémoire
+TTL = 45            # secondes pendant lesquelles une recherche Twitch identique est resservie telle quelle
+
+
+class Lines(list):
+    """journal d'un travail : seulement les dernières lignes"""
+
+    def append(self, x):
+        super().append(x)
+        if len(self) > 200:
+            del self[:100]
 
 
 class Job:
@@ -33,7 +48,7 @@ class Job:
         self.id = uuid.uuid4().hex[:10]
         self.kind, self.label = kind, label
         self.status = "en attente"
-        self.lines: list[str] = []
+        self.lines: list[str] = Lines()
         self.result = None
         self.error = None
         self.created = time.time()
@@ -51,6 +66,22 @@ class App:
         self.out.mkdir(parents=True, exist_ok=True)
         self.jobs: dict[str, Job] = {}
         self.heavy = threading.Lock()  # un rendu à la fois (carte graphique, processeur)
+        self._meta: dict[str, tuple[float, dict]] = {}  # fiches des clips déjà lues (clé : fichier, date)
+        self._twitch: dict[tuple, tuple[float, list]] = {}  # recherches Twitch récentes
+
+    def twitch(self, kind: str, *args):
+        """clips viraux ou lives, avec une courte mémoire : changer d'onglet ne réinterroge pas Twitch"""
+        from .. import viral
+        key = (kind, *args)
+        hit = self._twitch.get(key)
+        if hit and time.time() - hit[0] < TTL:
+            return hit[1]
+        data = viral.top_clips(*args, n=40) if kind == "clips" else viral.lives(*args, n=24)
+        if data:
+            self._twitch[key] = (time.time(), data)
+        for k in [k for k, v in self._twitch.items() if time.time() - v[0] > 10 * TTL]:
+            del self._twitch[k]
+        return data
 
     # ---------- options d'un travail
     def opts(self, **kw):
@@ -64,6 +95,9 @@ class App:
     def start(self, kind: str, label: str, fn, heavy=True) -> Job:
         job = Job(kind, label)
         self.jobs[job.id] = job
+        old = sorted((j for j in self.jobs.values() if j.status in ("fini", "erreur")), key=lambda j: j.created)
+        for j in old[:-JOBS_KEPT]:  # sur un serveur qui tourne des semaines, la liste ne grossit pas
+            del self.jobs[j.id]
 
         def run():
             _tls.job = job
@@ -87,32 +121,45 @@ class App:
         return job
 
     # ---------- bibliothèque
+    def meta(self, jf: Path) -> dict | None:
+        try:
+            mt = jf.stat().st_mtime
+            hit = self._meta.get(jf.name)
+            if hit and hit[0] == mt:
+                return hit[1]
+            m = json.loads(jf.read_text(encoding="utf-8"))
+            self._meta[jf.name] = (mt, m)
+            return m
+        except Exception:  # noqa: BLE001 (fichier en cours d'écriture, ou abîmé)
+            return None
+
     def library(self):
         items = []
-        for jf in sorted(self.out.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        for jf in self.out.glob("*.json"):
             mp4 = jf.with_suffix(".mp4")
-            if not mp4.exists():
+            m = self.meta(jf) if mp4.exists() else None
+            if not m or "layout" not in m:
                 continue
-            try:
-                m = json.loads(jf.read_text(encoding="utf-8"))
-            except Exception:
-                continue
+            mt = mp4.stat().st_mtime
             items.append({"id": jf.stem, "titre": m.get("title", ""), "streamer": m.get("streamer", ""),
                           "duree": round(m.get("dur", 0), 1), "lien": m.get("source_link") or m.get("source"),
                           "style": (m.get("style") or {}).get("highlight", "jaune"),
-                          "mp4": f"/media/{mp4.name}?v={int(mp4.stat().st_mtime)}",
-                          "poster": f"/poster/{jf.stem}?v={int(mp4.stat().st_mtime)}",
-                          "date": mp4.stat().st_mtime, "viral": bool(m.get("viral"))})
+                          "mp4": f"/media/{mp4.name}?v={int(mt)}", "poster": f"/poster/{jf.stem}?v={int(mt)}",
+                          "date": mt, "viral": bool(m.get("viral"))})
+        items.sort(key=lambda c: -c["date"])
         return items
 
     def clip(self, cid: str):
         jf = self.out / f"{cid}.json"
         m = json.loads(jf.read_text(encoding="utf-8"))
         st = m.get("style") or {}
+        L = m.get("layout") or {}
         return {"id": cid, "titre": m.get("title", ""), "streamer": m.get("streamer", ""), "words": m.get("words", []),
                 "style": st.get("highlight", "jaune"), "mots": st.get("max_words", 2), "lien": m.get("source_link"),
                 "mp4": f"/media/{cid}.mp4?v={int((self.out / f'{cid}.mp4').stat().st_mtime)}",
-                "section_ok": Path(m.get("section", "")).exists()}
+                "section_ok": Path(m.get("section", "")).exists(),
+                "cadrage": {"type": L.get("kind"), "cam": L.get("box") or L.get("cam"), "l": L.get("src_w"),
+                            "h": L.get("src_h")}}
 
     def poster(self, cid: str) -> Path | None:
         mp4, jpg = self.out / f"{cid}.mp4", self.out / ".posters" / f"{cid}.jpg"
@@ -123,6 +170,40 @@ class App:
             subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", "2.5", "-i", str(mp4), "-frames:v", "1",
                             "-vf", "scale=360:-2", "-q:v", "4", str(jpg)], capture_output=True)
         return jpg if jpg.exists() else None
+
+    def frame(self, cid: str) -> Path | None:
+        """une image de la vidéo d'origine (au milieu du clip), pour tracer le cadre de la webcam à la main"""
+        m = self.meta(self.out / f"{cid}.json")
+        if not m or not Path(m.get("section", "")).exists():
+            return None
+        jpg = self.out / ".posters" / f"{cid}_source.jpg"
+        jpg.parent.mkdir(exist_ok=True)
+        if not jpg.exists():
+            t = float(m.get("t_in", 0)) + float(m.get("dur", 0)) / 2
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.2f}", "-i", m["section"], "-frames:v", "1",
+                            "-vf", "scale=960:-2", "-q:v", "4", str(jpg)], capture_output=True)
+        return jpg if jpg.exists() else None
+
+    def delete(self, cid: str):
+        """supprime un clip, et son extrait source s'il ne sert à aucun autre clip (c'est lui qui prend la place)"""
+        jf = self.out / f"{cid}.json"
+        m = self.meta(jf) or {}
+        for f in (jf, jf.with_suffix(".mp4"), jf.with_suffix(".txt"), self.out / ".posters" / f"{cid}.jpg",
+                  self.out / ".posters" / f"{cid}_source.jpg"):
+            f.unlink(missing_ok=True)
+        self._meta.pop(jf.name, None)
+        sec = Path(m["section"]) if m.get("section") else None
+        work = (self.out / ".travail").resolve()
+        if not sec or work not in sec.resolve().parents:  # on ne touche qu'à notre dossier de travail
+            return
+        used = {str(Path(x["section"]).resolve()) for x in (self.meta(j) for j in self.out.glob("*.json"))
+                if x and x.get("section")}
+        if str(sec.resolve()) in used:
+            return
+        sec.unlink(missing_ok=True)
+        d = sec.parent
+        if d != work and not any(d.glob("*.mp4")) and not any(d.glob("candidats_*.json")):
+            shutil.rmtree(d, ignore_errors=True)
 
     # ---------- actions
     def act(self, body: dict) -> Job:
@@ -160,18 +241,21 @@ class App:
 
             def fn(job):
                 from ..live import clip_live
-                o = self.opts(minutes=float(body.get("minutes") or 120), seuil=float(body.get("seuil") or 1.0),
-                              stop_event=job.stop, style=body.get("style") or "jaune", langue=body.get("langue") or None)
+                o = self.opts(minutes=float(body.get("minutes") or 0), seuil=float(body.get("seuil") or 1.0),
+                              stop_event=job.stop, style=body.get("style") or "jaune", langue=body.get("langue") or None,
+                              veille=bool(body.get("veille")), verrou=self.heavy)
                 made = clip_live(url, o)
                 return {"clips": [m.stem for m in made]}
-            return self.start("live", f"En direct : {url.split('/')[-1]}", fn, heavy=False)
+            who = url.rstrip("/").split("/")[-1].replace("kick:", "")
+            return self.start("live", ("Veille : " if body.get("veille") else "En direct : ") + who, fn, heavy=False)
         if t == "rerender":
             cid = body["id"]
 
             def fn(job):
                 log("nouveau rendu du clip…")
                 pipeline.redo_with(self.out / f"{cid}.json", title=body.get("titre"), words=body.get("words"),
-                                   style=body.get("style"), mots=body.get("mots"))
+                                   style=body.get("style"), mots=body.get("mots"), cam=body.get("cam") or None,
+                                   mise_en_page=body.get("mise_en_page") or None)
                 return {"clip": cid}
             return self.start("rerender", f"Mise à jour : {cid}", fn)
         raise ValueError(f"action inconnue : {t}")
@@ -182,15 +266,17 @@ def make_handler(app: App, password: str | None):
 
     class H(BaseHTTPRequestHandler):
         server_version = "GTAStreamClipper"
+        protocol_version = "HTTP/1.1"  # la connexion reste ouverte : chaque clic ne rouvre pas une connexion
 
         def log_message(self, *a):
             pass
 
         def _auth(self) -> bool:
-            if not auth_ok or self.headers.get("Authorization") == auth_ok:
+            if not auth_ok or hmac.compare_digest(self.headers.get("Authorization") or "", auth_ok):
                 return True
             self.send_response(401)
             self.send_header("WWW-Authenticate", 'Basic realm="GTA Stream Clipper (utilisateur : clipper)"')
+            self.send_header("Content-Length", "0")
             self.end_headers()
             return False
 
@@ -260,12 +346,12 @@ def make_handler(app: App, password: str | None):
                     return self._json({"version": __version__, "styles": STYLES, "langues": LANGS,
                                        "sortie": str(app.out)})
                 if p == "/api/viral":
-                    from ..viral import top_clips
-                    return self._json(top_clips(q.get("jeu") or "Grand Theft Auto VI", q.get("periode") or "jour",
-                                                q.get("langue") or None, q.get("chaine") or None, n=40))
+                    return self._json(app.twitch("clips", q.get("jeu") or "Grand Theft Auto VI",
+                                                 q.get("periode") or "jour", q.get("langue") or None,
+                                                 q.get("chaine") or None))
                 if p == "/api/lives":
-                    from ..viral import lives
-                    return self._json(lives(q.get("jeu") or "Grand Theft Auto VI", q.get("langue") or None, n=24))
+                    return self._json(app.twitch("lives", q.get("jeu") or "Grand Theft Auto VI",
+                                                 q.get("langue") or None))
                 if p == "/api/jobs":
                     return self._json(sorted((j.public() for j in app.jobs.values()), key=lambda j: -j["created"]))
                 if p == "/api/library":
@@ -279,6 +365,10 @@ def make_handler(app: App, password: str | None):
                 m = re.fullmatch(r"/poster/([\w.\-]+)", p)
                 if m:
                     f = app.poster(m.group(1))
+                    return self._file(f) if f else self._json({}, 404)
+                m = re.fullmatch(r"/frame/([\w.\-]+)", p)
+                if m:
+                    f = app.frame(m.group(1))
                     return self._file(f) if f else self._json({}, 404)
                 m = re.fullmatch(r"/download/([\w.\-]+)", p)
                 if m:
@@ -303,8 +393,7 @@ def make_handler(app: App, password: str | None):
                     return self._json({"ok": True})
                 m = re.fullmatch(r"/api/clip/([\w.\-]+)/supprimer", p)
                 if m:
-                    for ext in (".mp4", ".json", ".txt"):
-                        (app.out / f"{m.group(1)}{ext}").unlink(missing_ok=True)
+                    app.delete(m.group(1))
                     return self._json({"ok": True})
                 return self._json({"erreur": "introuvable"}, 404)
             except Exception as e:  # noqa: BLE001
@@ -321,8 +410,40 @@ def serve(opts: argparse.Namespace):
         raise SystemExit("sur un serveur, ajoute --mot-de-passe (l'interface serait sinon ouverte à tout internet)")
     if not getattr(opts, "style", None):
         opts.style = "jaune"
+    local = host in ("127.0.0.1", "localhost")
+    ThreadingHTTPServer.daemon_threads = True
+    ThreadingHTTPServer.allow_reuse_address = False  # sous Windows, sinon deux exemplaires se partagent le port
+    if local:  # déjà ouvert (double-clic sur l'exécutable) ? on rouvre simplement la page
+        try:
+            cfg = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/config", timeout=2).read())
+            if "styles" in cfg:
+                log(f"GTA Stream Clipper est déjà ouvert : http://localhost:{port}/ (cette fenêtre peut être fermée)")
+                if not getattr(opts, "sans_navigateur", False):
+                    webbrowser.open(f"http://localhost:{port}/")
+                return
+        except Exception:  # noqa: BLE001 (personne sur ce port, ou autre chose que nous)
+            pass
     app = App(opts)
-    httpd = ThreadingHTTPServer((host, port), make_handler(app, pwd))
+    handler = make_handler(app, pwd)
+    httpd = None
+    for k in range(20 if local else 1):  # port pris par un autre programme : on essaie les suivants
+        try:
+            httpd = ThreadingHTTPServer((host, port + k), handler)
+            port += k
+            break
+        except OSError:
+            continue
+    if httpd is None:
+        raise SystemExit(f"le port {port} est déjà pris : choisis-en un autre avec --port")
+    if local:
+        # « localhost » est d'abord essayé en IPv6 par Windows : sans écoute de ce côté, chaque requête attend
+        # 0,2 à 2 secondes avant de retomber sur 127.0.0.1. On écoute donc aussi sur ::1.
+        class V6(ThreadingHTTPServer):
+            address_family = socket.AF_INET6
+        try:
+            threading.Thread(target=V6(("::1", port), handler).serve_forever, daemon=True).start()
+        except OSError:
+            pass  # pas d'IPv6 sur cette machine : rien à accélérer
     # « localhost » plutôt que 127.0.0.1 : le lecteur de clips Twitch n'accepte que des noms de domaine
     url = f"http://{'localhost' if host in ('0.0.0.0', '', '127.0.0.1') else host}:{port}/"
     log(f"GTA Stream Clipper {__version__} : interface sur {url}" + (" (utilisateur : clipper)" if pwd else ""))
