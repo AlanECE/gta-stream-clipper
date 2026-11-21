@@ -11,6 +11,7 @@ import copy
 import hmac
 import json
 import mimetypes
+import os
 import re
 import shutil
 import socket
@@ -145,8 +146,15 @@ class App:
             except BaseException as e:  # noqa: BLE001 (on veut tout remonter à l'interface)
                 job.status = "erreur"
                 job.error = explain(e)
-                if not isinstance(e, SystemExit):
+                # dans la fenêtre noire : une ligne claire pour un échec attendu (stream réservé aux abonnés, lien
+                # faux…), le détail technique seulement pour une vraie panne ou si CLIPPER_DEBUG est défini
+                if os.environ.get("CLIPPER_DEBUG") or not isinstance(e, (SystemExit, RuntimeError)):
                     traceback.print_exc()
+                else:
+                    try:
+                        print("» échec :", job.error, flush=True)
+                    except Exception:  # noqa: BLE001
+                        pass
             finally:
                 _tls.job = None
         threading.Thread(target=run, daemon=True).start()
