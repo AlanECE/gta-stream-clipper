@@ -23,6 +23,7 @@ AppPublisherURL={#Repo}
 AppSupportURL={#Repo}/issues
 AppUpdatesURL={#Repo}/releases
 DefaultDirName={localappdata}\Programs\{#AppName}
+DisableWelcomePage=no
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
@@ -33,12 +34,13 @@ SetupIconFile=icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 WizardStyle=modern dynamic
-WizardSizePercent=140
+WizardSizePercent=150
 WizardImageFile=wizard-100.png,wizard-125.png,wizard-150.png,wizard-200.png,wizard-250.png
 WizardSmallImageFile=wizard-small-100.png,wizard-small-125.png,wizard-small-150.png,wizard-small-200.png,wizard-small-250.png
 Compression=lzma2/ultra64
 SolidCompression=yes
-LZMANumBlockThreads=8
+LZMAUseSeparateProcess=yes
+LZMANumBlockThreads=4
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=force
@@ -59,6 +61,7 @@ fr.FinishedHeadingLabel=C'est prêt !
 fr.FinishedLabel=GTA Stream Clipper est installé : son icône est sur ton Bureau.%n%nAu lancement, une fenêtre noire s'ouvre et l'interface s'affiche dans ton navigateur. Laisse la fenêtre noire ouverte : c'est elle qui fait tourner l'application (la fermer arrête tout).%n%nTes clips sont rangés dans Vidéos\GTA Stream Clipper.
 fr.FinishedLabelNoIcons=GTA Stream Clipper est installé.
 fr.ClickFinish=Clique sur Terminer.
+fr.ClickNext=
 
 [Files]
 Source: "..\dist\GTA-Stream-Clipper\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -80,8 +83,10 @@ Filename: "{app}\{#AppExe}"; Description: "Lancer GTA Stream Clipper"; WorkingDi
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
+#ifndef SHOTS
 ; le modèle de transcription et les emojis téléchargés (tes clips, eux, restent dans Vidéos)
 Type: filesandordirs; Name: "{localappdata}\gta-stream-clipper"
+#endif
 
 [Code]
 { Une page du tuto : la capture la plus grande possible, et une ou deux phrases dessous. }
@@ -93,22 +98,13 @@ var
   Avail, W, H: Integer;
 begin
   Page := CreateCustomPage(AfterID, Caption, Desc);
-  Lbl := TNewStaticText.Create(Page);
-  Lbl.Parent := Page.Surface;
-  Lbl.AutoSize := False;
-  Lbl.WordWrap := True;
-  Lbl.Width := Page.SurfaceWidth;
-  Lbl.Height := ScaleY(40);
-  Lbl.Top := Page.SurfaceHeight - Lbl.Height;
-  Lbl.Caption := Text;
-  Lbl.Font.Size := 10;
-
   ExtractTemporaryFile(ImageFile);
   Img := TBitmapImage.Create(Page);
   Img.Parent := Page.Surface;
   Img.Stretch := True;
-  Img.PngImage.LoadFromFile(ExpandConstant('{tmp}\' + ImageFile));
-  Avail := Lbl.Top - ScaleY(8);
+  Img.PngImage.LoadFromFile(ExpandConstant('{tmp}\') + ImageFile);
+  { la place pour le texte : deux lignes }
+  Avail := Page.SurfaceHeight - ScaleY(52);
   W := Page.SurfaceWidth;
   H := W * ImgH div ImgW;
   if H > Avail then begin
@@ -119,6 +115,17 @@ begin
   Img.Height := H;
   Img.Left := (Page.SurfaceWidth - W) div 2;
   Img.Top := 0;
+
+  Lbl := TNewStaticText.Create(Page);
+  Lbl.Parent := Page.Surface;
+  Lbl.AutoSize := False;
+  Lbl.WordWrap := True;
+  Lbl.Left := 0;
+  Lbl.Width := Page.SurfaceWidth;
+  Lbl.Top := H + ScaleY(10);
+  Lbl.Height := Page.SurfaceHeight - Lbl.Top;
+  Lbl.Caption := Text;
+  Lbl.Font.Size := 10;
   Result := Page.ID;
 end;
 
@@ -128,10 +135,18 @@ end;
 function SetTimer(hWnd: LongWord; nIDEvent, uElapse: LongWord; lpTimerFunc: LongWord): LongWord;
   external 'SetTimer@user32.dll stdcall';
 
+var
+  ShotPage: Integer;
+
 procedure ShotTick(H: LongWord; Msg: LongWord; IdEvent: LongWord; Time: LongWord);
 var
   I: Integer;
 begin
+  { chaque page reste affichée au moins un tour complet avant d'être passée }
+  if WizardForm.CurPageID <> ShotPage then begin
+    ShotPage := WizardForm.CurPageID;
+    Exit;
+  end;
   if WizardForm.CurPageID = wpFinished then
     for I := 0 to WizardForm.RunList.Items.Count - 1 do
       WizardForm.RunList.Checked[I] := False;
@@ -140,12 +155,19 @@ begin
 end;
 #endif
 
+{ la page d'accueil est la dernière avant la copie des fichiers : son bouton dit « Installer » }
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = wpWelcome then
+    WizardForm.NextButton.Caption := SetupMessage(msgButtonInstall);
+end;
+
 procedure InitializeWizard;
 var
   ID: Integer;
 begin
 #ifdef SHOTS
-  SetTimer(0, 0, 3000, CreateCallback(@ShotTick));
+  SetTimer(0, 0, 2500, CreateCallback(@ShotTick));
 #endif
   ID := AddTuto(wpInstalling, 'Comment ça marche · 1 sur 4', 'Les clips viraux : les moments qui ont déjà fait le buzz',
     'tuto1.png', {#Tuto1W}, {#Tuto1H},

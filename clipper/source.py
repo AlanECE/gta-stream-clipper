@@ -153,7 +153,12 @@ def grab(url: str, out: Path, start: float, dur: float) -> Path:
 
 
 def fetch(url: str, out: Path, dur: float = 60.0) -> Path:
-    """Un clip (Twitch…) tel quel : c'est déjà un MP4 complet, on le copie sans le réencoder."""
+    """Un clip (Twitch…) tel quel : c'est déjà un MP4 complet. yt-dlp le télécharge lui-même (sa connexion
+    sécurisée marche partout, y compris avec le FFmpeg statique du Mac) ; ffmpeg ne sert qu'en secours."""
+    out.unlink(missing_ok=True)
+    r = ytdlp("-f", "best[ext=mp4]/best", "--no-playlist", "--no-part", "-o", str(out), url, check=False)
+    if r.returncode == 0 and out.exists() and out.stat().st_size > 50_000:
+        return out
     urls = media_urls(url)
     if len(urls) == 1:
         try:

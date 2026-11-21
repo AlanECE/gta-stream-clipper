@@ -106,6 +106,14 @@ def main():
             if os.path.isdir(ff):
                 os.environ["PATH"] = os.path.abspath(ff) + os.pathsep + os.environ.get("PATH", "")
         os.environ.setdefault("CLIPPER_FROZEN", "1")
+        if sys.platform == "darwin":
+            # le FFmpeg statique du Mac cherche ses certificats dans un dossier qui n'existe que chez celui qui l'a
+            # compilé : on lui donne ceux de l'application (sinon toute adresse https échoue)
+            try:
+                import certifi
+                os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+            except ImportError:
+                pass
     args = sys.argv[1:]
     if sys.platform == "darwin" and frozen and not [a for a in args if not a.startswith("-psn")]:
         return mac_window(default_output())

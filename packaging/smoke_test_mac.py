@@ -78,8 +78,19 @@ try:
                 raise SystemExit("ÉCHEC : l'interface ne répond pas après 2 minutes")
             time.sleep(2)
     say(f"   interface prête en {time.time() - t:.0f} s · version {cfg['version']} · dossier {cfg['sortie']}")
-    time.sleep(4)
-    shot("1-fenetre-et-navigateur")
+    time.sleep(12)
+    shot("1-navigateur")
+    subprocess.run(["osascript", "-e", 'tell application "GTA Stream Clipper" to activate'])
+    time.sleep(2)
+    shot("1-fenetre-application")
+
+    say("1b. FFmpeg lit une adresse https (avec les certificats de l'application)")
+    import certifi
+    env = {**__import__("os").environ, "SSL_CERT_FILE": certifi.where()}
+    r = subprocess.run([str(FFMPEG / "ffmpeg"), "-v", "error", "-t", "1", "-i",
+                        "https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png",
+                        "-f", "null", "-"], capture_output=True, text=True, env=env, timeout=60)
+    say(f"   {'oui' if r.returncode == 0 else 'NON : ' + r.stderr.strip()[-200:]}")
 
     say("2. clips viraux")
     clips = []
