@@ -5,13 +5,17 @@
 
 Windows → dist/GTA-Stream-Clipper/ (dossier), dist/GTA-Stream-Clipper-Windows.zip (version portable) et, si
           Inno Setup 6 est installé, dist/GTA-Stream-Clipper-Setup.exe (installeur avec icône sur le Bureau et tuto).
-Mac     → dist/GTA Stream Clipper.app et dist/GTA-Stream-Clipper-Mac.dmg (puce Apple).
+Mac     → dist/GTA Stream Clipper.app et dist/GTA-Stream-Clipper-Mac.dmg (puce Apple) ou
+          dist/GTA-Stream-Clipper-Mac-Intel.dmg (Mac Intel) : chacune se construit sur un Mac de son type.
+          Elles doivent tourner dès macOS 12 (MAC_MIN) : les dépendances s'installent depuis des paquets compatibles
+          (voir .github/workflows/mac.yml) et packaging/check_mac.py refuse une application qui exigerait plus.
 
 FFmpeg (GPL) est téléchargé et rangé dans l'application : version « essentials » de gyan.dev sous Windows,
 version statique de Martin Riedl (ffmpeg.martin-riedl.de) sur Mac.
 Le modèle de transcription n'est pas dans le paquet : il se télécharge au premier clip.
 """
 import os
+import platform
 import plistlib
 import shutil
 import subprocess
@@ -27,7 +31,10 @@ DIST, BUILD = ROOT / "dist", ROOT / "build"
 PACK = ROOT / "packaging"
 MAC = sys.platform == "darwin"
 FF_WIN = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-FF_MAC = "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/{}.zip"
+FF_MAC = "https://ffmpeg.martin-riedl.de/redirect/latest/macos/{}/release/{}.zip"
+MAC_MIN = "12.0"  # macOS Monterey : le plus ancien qu'on fait tourner (puce Apple et Intel)
+ARCH = platform.machine() if MAC else ""  # arm64 (puce Apple) ou x86_64 (Intel)
+DMG = f"{NAME}-Mac.dmg" if ARCH != "x86_64" else f"{NAME}-Mac-Intel.dmg"
 
 
 def version() -> str:
@@ -71,8 +78,9 @@ def ffmpeg_windows(dst: Path):
 
 def ffmpeg_mac(dst: Path):
     dst.mkdir(parents=True, exist_ok=True)
+    ff_arch = "amd64" if ARCH == "x86_64" else "arm64"
     for tool in ("ffmpeg", "ffprobe"):
-        z = download(FF_MAC.format(tool), BUILD / f"{tool}-mac-arm64.zip")
+        z = download(FF_MAC.format(ff_arch, tool), BUILD / f"{tool}-mac-{ff_arch}.zip")
         with zipfile.ZipFile(z) as zf:
             member = next(n for n in zf.namelist() if n.rsplit("/", 1)[-1] == tool)
             with zf.open(member) as src, open(dst / tool, "wb") as out:
@@ -179,7 +187,7 @@ def build_mac(v: str):
     plist = app / "Contents" / "Info.plist"
     info = plistlib.loads(plist.read_bytes())
     info.update({"CFBundleDisplayName": APP, "CFBundleShortVersionString": v, "CFBundleVersion": v,
-                 "NSHighResolutionCapable": True, "LSMinimumSystemVersion": "12.0",
+                 "NSHighResolutionCapable": True, "LSMinimumSystemVersion": MAC_MIN,
                  "LSApplicationCategoryType": "public.app-category.video",
                  "NSHumanReadableCopyright": "MIT - github.com/AlanECE/gta-stream-clipper"})
     plist.write_bytes(plistlib.dumps(info))
@@ -187,12 +195,14 @@ def build_mac(v: str):
     for tool in ("ffmpeg", "ffprobe"):
         subprocess.run(["codesign", "--force", "-s", "-", str(app / "Contents" / "MacOS" / "ffmpeg" / tool)], check=True)
     subprocess.run(["codesign", "--force", "--deep", "-s", "-", str(app)], check=True)
+    # chaque binaire doit tourner sur le macOS annoncé et sur ce type de Mac, et la signature doit être intacte
+    subprocess.run([sys.executable, str(PACK / "check_mac.py"), str(app), "--min", MAC_MIN, "--arch", ARCH], check=True)
     stage = BUILD / "dmg"
     shutil.rmtree(stage, ignore_errors=True)
     stage.mkdir(parents=True)
     subprocess.run(["ditto", str(app), str(stage / app.name)], check=True)
     os.symlink("/Applications", stage / "Applications")
-    dmg = DIST / f"{NAME}-Mac.dmg"
+    dmg = DIST / DMG
     dmg.unlink(missing_ok=True)
     subprocess.run(["hdiutil", "create", "-volname", APP, "-srcfolder", str(stage), "-ov", "-format", "UDZO",
                     str(dmg)], check=True)

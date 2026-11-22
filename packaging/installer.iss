@@ -1,6 +1,6 @@
 ; L'installeur Windows de GTA Stream Clipper (Inno Setup 6.7).
 ;   python build_exe.py      (le construit après l'application, si Inno Setup 6 est installé)
-; ou à la main : ISCC.exe /DAppVersion=1.4.0 packaging\installer.iss
+; ou à la main : ISCC.exe /DAppVersion=1.4.1 packaging\installer.iss
 ;
 ; Sans droits administrateur : l'application s'installe dans le dossier de l'utilisateur, avec une icône sur le
 ; Bureau et dans le menu Démarrer. Après la copie des fichiers, un tuto en 4 écrans montre comment s'en servir.

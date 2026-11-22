@@ -15,7 +15,9 @@ import os
 import re
 import shutil
 import socket
+import socketserver
 import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -66,7 +68,17 @@ def explain(e: BaseException) -> str:
 class Quiet(ThreadingHTTPServer):
     """le navigateur coupe ses connexions quand on ferme l'onglet : ce n'est pas une erreur à afficher"""
     daemon_threads = True
-    allow_reuse_address = False  # sous Windows, sinon deux exemplaires se partagent le port
+    # Windows : SO_REUSEADDR laisserait deux exemplaires se partager le port. Mac et Linux : sans lui, relancer
+    # l'application juste après l'avoir quittée tombe sur un port encore en attente (TIME_WAIT, une trentaine de
+    # secondes) et l'interface partirait sur un autre port
+    allow_reuse_address = sys.platform != "win32"
+
+    def server_bind(self):
+        # sans socket.getfqdn() (HTTPServer.server_bind) : chercher le nom de la machine ne sert à rien ici, peut
+        # prendre plusieurs secondes, et sous macOS 15 fait partie des appels qui déclenchent la demande d'accès
+        # au réseau local
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = str(self.server_address[0]), self.server_address[1]
 
     def handle_error(self, request, client_address):
         import sys
@@ -527,7 +539,11 @@ def make_handler(app: App, password: str | None):
     return H
 
 
+URL = ""  # l'adresse de l'interface une fois le serveur lancé (la fenêtre Mac s'en sert)
+
+
 def serve(opts: argparse.Namespace):
+    global URL
     host, port = getattr(opts, "host", "127.0.0.1"), int(getattr(opts, "port", 8765))
     pwd = getattr(opts, "mot_de_passe", None)
     if host not in ("127.0.0.1", "localhost") and not pwd:
@@ -568,6 +584,7 @@ def serve(opts: argparse.Namespace):
             pass  # pas d'IPv6 sur cette machine : rien à accélérer
     # « localhost » plutôt que 127.0.0.1 : le lecteur de clips Twitch n'accepte que des noms de domaine
     url = f"http://{'localhost' if host in ('0.0.0.0', '', '127.0.0.1') else host}:{port}/"
+    URL = url
     log(f"GTA Stream Clipper {__version__} : interface sur {url}" + (" (utilisateur : clipper)" if pwd else ""))
     log(f"clips enregistrés dans {app.out}")
     if not getattr(opts, "sans_navigateur", False):

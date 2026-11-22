@@ -1,8 +1,10 @@
 """Test de la version Mac, comme un utilisateur : double-clic sur l'application, l'interface répond, un vrai clip
 viral est monté, l'éditeur le refait, « Quitter » ferme tout, l'image disque s'ouvre.
 Compte rendu (captures, clip, journal) dans build/smoke/.   python packaging/smoke_test_mac.py
+GSC_APP=<chemin de l'application> : teste une application déjà installée (par exemple dans /Applications).
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -11,14 +13,32 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-APP = ROOT / "dist" / "GTA Stream Clipper.app"
-DMG = ROOT / "dist" / "GTA-Stream-Clipper-Mac.dmg"
+APP = Path(os.environ.get("GSC_APP") or ROOT / "dist" / "GTA Stream Clipper.app")
+DMG = next((ROOT / "dist").glob("GTA-Stream-Clipper-Mac*.dmg"), ROOT / "dist" / "GTA-Stream-Clipper-Mac.dmg")
 OUT = ROOT / "build" / "smoke"
 BASE = "http://127.0.0.1:8765"
 CLIPS = Path.home() / "Movies" / "GTA Stream Clipper"
 FFMPEG = APP / "Contents" / "MacOS" / "ffmpeg"
 OUT.mkdir(parents=True, exist_ok=True)
 report = []
+NETWORK_PROMPT = '''
+tell application "System Events"
+  repeat with p in (every process)
+    try
+      repeat with w in (every window of p)
+        repeat with b in {"Don’t Allow", "Don't Allow", "Ne pas autoriser"}
+          if exists (button b of w) then
+            set t to name of p
+            click button b of w
+            return t
+          end if
+        end repeat
+      end repeat
+    end try
+  end repeat
+end tell
+return ""
+'''
 
 
 def say(*a):
@@ -80,6 +100,10 @@ try:
     say(f"   interface prête en {time.time() - t:.0f} s · version {cfg['version']} · dossier {cfg['sortie']}")
     time.sleep(12)
     shot("1-navigateur")
+    # macOS 15 peut demander « Autoriser … à trouver des appareils sur les réseaux locaux ? » : on refuse (le pire
+    # cas), et la suite du test vérifie que l'application marche sans
+    who = subprocess.run(["osascript", "-e", NETWORK_PROMPT], capture_output=True, text=True, timeout=60).stdout.strip()
+    say(f"   demande d'accès au réseau local : {'oui (' + who + '), refusée' if who else 'aucune'}")
     subprocess.run(["osascript", "-e", 'tell application "GTA Stream Clipper" to activate'])
     time.sleep(2)
     shot("1-fenetre-application")
@@ -160,6 +184,10 @@ try:
     say(f"   processus restants : {len(left)}")
 
     say("5. image disque")
+    if not DMG.exists():
+        say("   pas d'image disque à tester ici")
+        say("RÉSULTAT : tout est passé")
+        finish(True)
     m = subprocess.run(["hdiutil", "attach", "-nobrowse", "-readonly", str(DMG)], capture_output=True, text=True).stdout
     vol = next((ln.split("\t")[-1].strip() for ln in m.splitlines() if "/Volumes/" in ln), None)
     say(f"   contenu : {sorted(p.name for p in Path(vol).iterdir()) if vol else 'NON MONTÉE'}")

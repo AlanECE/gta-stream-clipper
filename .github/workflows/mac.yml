@@ -1,8 +1,13 @@
-# Construit et teste la version Mac sur un vrai Mac (puce Apple), puis joint GTA-Stream-Clipper-Mac.dmg à la
-# release GitHub. L'installeur Windows, lui, se construit sur un PC Windows (python build_exe.py).
+# Construit et teste les versions Mac, puis les joint à la release GitHub :
+#   GTA-Stream-Clipper-Mac.dmg        → Mac à puce Apple (M1, M2, M3, M4…), construit sur un Mac à puce Apple
+#   GTA-Stream-Clipper-Mac-Intel.dmg  → Mac Intel, construit sur un Mac Intel
+# Les deux tournent dès macOS 12 : les dépendances viennent de paquets compatibles avec macOS 12 (pip download
+# --platform), et packaging/check_mac.py refuse une application qui exigerait un macOS plus récent (le Mac de GitHub
+# a toujours le dernier macOS : sans ce contrôle, un plantage chez les autres passerait inaperçu).
+# L'installeur Windows, lui, se construit sur un PC Windows (python build_exe.py).
 #   - automatiquement quand une release est publiée ;
-#   - à la main (Actions > Version Mac > Run workflow) : avec un tag, le .dmg est joint à cette release ;
-#     sans tag, il est seulement construit, testé et gardé avec le compte rendu du test.
+#   - à la main (Actions > Version Mac > Run workflow) : avec un tag, les .dmg sont joints à cette release ;
+#     sans tag, ils sont seulement construits, testés et gardés avec le compte rendu des tests.
 name: Version Mac
 
 on:
@@ -11,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Tag de la release où joindre GTA-Stream-Clipper-Mac.dmg (vide = construire et tester seulement)"
+        description: "Tag de la release où joindre les .dmg (vide = construire et tester seulement)"
         required: false
         default: ""
 
@@ -20,8 +25,19 @@ permissions:
 
 jobs:
   mac:
-    runs-on: macos-15
-    timeout-minutes: 75
+    name: Mac ${{ matrix.nom }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - nom: puce Apple
+            runner: macos-15
+            arch: arm64
+          - nom: Intel
+            runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v4
 
@@ -30,28 +46,43 @@ jobs:
           python-version: "3.11"
 
       - name: Python a bien Tk (la fenêtre de l'application)
-        run: python -c "import tkinter; print('Tk', tkinter.Tcl().eval('info patchlevel'))"
+        run: python -c "import tkinter, platform; print('Tk', tkinter.Tcl().eval('info patchlevel'), platform.machine(), platform.mac_ver()[0])"
 
-      - name: Dépendances
+      - name: Dépendances (paquets compatibles avec macOS 12)
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller
+          pip download --only-binary=:all: --platform "macosx_12_0_${{ matrix.arch }}" -r requirements.txt -d wheels
+          pip install --no-index --find-links wheels -r requirements.txt
+          pip install pyinstaller selenium
+          pip list | grep -i -E "^(numpy|opencv|onnxruntime|ctranslate2|av|faster|yt-dlp|tokenizers|pyinstaller) "
 
-      - name: Application + image disque
+      - name: Application + image disque (avec le contrôle des binaires)
         run: python build_exe.py
 
-      - name: Test sur le Mac (double-clic, interface, un vrai clip viral, éditeur, Quitter, image disque)
+      - name: Test sur le Mac (double-clic, interface, un vrai clip viral, éditeur, timeline, Quitter, image disque)
         run: python packaging/smoke_test_mac.py
+
+      - name: Test de l'interface dans Safari
+        run: |
+          sudo safaridriver --enable
+          python packaging/safari_test_mac.py
+
+      - name: Installeur en une ligne (install-mac.sh, avec le .dmg qu'on vient de construire)
+        run: |
+          GSC_DMG="$(ls "$PWD"/dist/GTA-Stream-Clipper-Mac*.dmg)" bash install-mac.sh
+          for i in $(seq 1 60); do curl -s -m 2 http://127.0.0.1:8765/api/config >/dev/null && break; sleep 2; done
+          curl -s -m 5 http://127.0.0.1:8765/api/config | python -c "import json,sys; print('installée dans Applications et ouverte : version', json.load(sys.stdin)['version'])"
+          osascript -e 'quit app "GTA Stream Clipper"'
 
       - uses: actions/upload-artifact@v4
         with:
-          name: GTA-Stream-Clipper-Mac
-          path: dist/GTA-Stream-Clipper-Mac.dmg
+          name: dmg-${{ matrix.arch }}
+          path: dist/GTA-Stream-Clipper-Mac*.dmg
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-mac
+          name: test-mac-${{ matrix.arch }}
           path: build/smoke/
 
       - name: Joindre à la release
@@ -59,4 +90,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
-        run: gh release upload "$TAG" dist/GTA-Stream-Clipper-Mac.dmg --clobber
+        run: gh release upload "$TAG" dist/GTA-Stream-Clipper-Mac*.dmg --clobber
