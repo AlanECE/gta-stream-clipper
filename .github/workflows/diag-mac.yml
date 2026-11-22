@@ -32,29 +32,23 @@ jobs:
           echo "--- syspolicy_check"; syspolicy_check distribution "$A" 2>&1 | head -40 || true
           python3 packaging/check_mac.py "$A" --min 12.0 --arch arm64 || true
       - name: Double-clic (comme dans le Finder)
+        timeout-minutes: 6
         run: |
           mkdir -p diag
-          open "/Applications/GTA Stream Clipper.app" || echo "open a échoué : $?"
-          sleep 12
+          ( open "/Applications/GTA Stream Clipper.app" > diag/open.txt 2>&1 & )
+          sleep 15
           screencapture -x diag/1-double-clic.png
-          curl -s -m 3 http://127.0.0.1:8765/api/config | head -c 200 || echo "l'appli ne répond pas"
+          curl -s -m 3 http://127.0.0.1:8765/api/config | head -c 120 || echo "l'appli ne répond pas"
           echo; pgrep -fl "GTA Stream Clipper" || echo "aucun processus GTA Stream Clipper"
-          log show --last 2m --predicate 'process == "syspolicyd" OR process == "CoreServicesUIAgent"' --style compact 2>/dev/null | grep -i -E "gta|stream clipper|assessment|deny|reject|malware|damaged" | tail -40 || true
-          open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension" || true
-          sleep 6
+          osascript -e 'tell application "System Events" to get name of every window of every process whose visible is true' 2>&1 | tr ',' '
+' | grep -v "^ *$" | head -30 || true
+          osascript -e 'tell application "System Events" to tell process "CoreServicesUIAgent" to get {name, value} of static texts of window 1' 2>&1 | head -5 || true
+          osascript -e 'tell application "System Events" to tell process "CoreServicesUIAgent" to get name of buttons of window 1' 2>&1 | head -5 || true
+          ( open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension" & )
+          sleep 8
           screencapture -x diag/2-reglages.png
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: diag-publie
           path: diag/
-
-  intel:
-    runs-on: macos-15-intel
-    steps:
-      - name: Mac Intel disponible ?
-        run: |
-          sw_vers; uname -m; sysctl -n machdep.cpu.brand_string
-          curl -sL -o pub.dmg https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Mac.dmg
-          hdiutil attach pub.dmg -nobrowse
-          "/Volumes/GTA Stream Clipper/GTA Stream Clipper.app/Contents/MacOS/GTA Stream Clipper" --version 2>&1 | tail -3 || echo "code retour $?"

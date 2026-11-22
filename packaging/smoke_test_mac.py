@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "dist" / "GTA Stream Clipper.app"
-DMG = ROOT / "dist" / "GTA-Stream-Clipper-Mac.dmg"
+DMG = next((ROOT / "dist").glob("GTA-Stream-Clipper-Mac*.dmg"), ROOT / "dist" / "GTA-Stream-Clipper-Mac.dmg")
 OUT = ROOT / "build" / "smoke"
 BASE = "http://127.0.0.1:8765"
 CLIPS = Path.home() / "Movies" / "GTA Stream Clipper"
