@@ -1,0 +1,60 @@
+# Diagnostic ponctuel : ce que voit quelqu'un qui télécharge le .dmg publié avec Safari et l'ouvre.
+name: Diagnostic Mac
+
+on:
+  push:
+    branches: [mac-fix]
+    paths: [".github/workflows/diag-mac.yml"]
+
+jobs:
+  publie:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Le .dmg publié, marqué « téléchargé par Safari »
+        run: |
+          sw_vers; uname -m
+          curl -sL -o pub.dmg https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Mac.dmg
+          Q="0083;$(printf '%x' $(date +%s));Safari;$(uuidgen)"
+          xattr -w com.apple.quarantine "$Q" pub.dmg
+          hdiutil attach pub.dmg -nobrowse
+          ls -la "/Volumes/GTA Stream Clipper"
+          echo "--- quarantaine vue dans l'image disque"; xattr -l "/Volumes/GTA Stream Clipper/GTA Stream Clipper.app" || true
+          ditto "/Volumes/GTA Stream Clipper/GTA Stream Clipper.app" "/Applications/GTA Stream Clipper.app"
+          xattr -r -w com.apple.quarantine "$Q" "/Applications/GTA Stream Clipper.app"
+          echo "--- quarantaine après copie dans Applications"; xattr -l "/Applications/GTA Stream Clipper.app"
+      - name: Ce qu'en pense macOS
+        run: |
+          A="/Applications/GTA Stream Clipper.app"
+          echo "--- codesign -dv"; codesign -dvvv "$A" 2>&1 | head -20
+          echo "--- codesign --verify --strict"; codesign --verify --deep --strict --verbose=2 "$A" 2>&1 | tail -15 || true
+          echo "--- spctl"; spctl -a -vvv -t exec "$A" 2>&1 || true
+          echo "--- syspolicy_check"; syspolicy_check distribution "$A" 2>&1 | head -40 || true
+          python3 packaging/check_mac.py "$A" --min 12.0 --arch arm64 || true
+      - name: Double-clic (comme dans le Finder)
+        run: |
+          mkdir -p diag
+          open "/Applications/GTA Stream Clipper.app" || echo "open a échoué : $?"
+          sleep 12
+          screencapture -x diag/1-double-clic.png
+          curl -s -m 3 http://127.0.0.1:8765/api/config | head -c 200 || echo "l'appli ne répond pas"
+          echo; pgrep -fl "GTA Stream Clipper" || echo "aucun processus GTA Stream Clipper"
+          log show --last 2m --predicate 'process == "syspolicyd" OR process == "CoreServicesUIAgent"' --style compact 2>/dev/null | grep -i -E "gta|stream clipper|assessment|deny|reject|malware|damaged" | tail -40 || true
+          open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension" || true
+          sleep 6
+          screencapture -x diag/2-reglages.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diag-publie
+          path: diag/
+
+  intel:
+    runs-on: macos-15-intel
+    steps:
+      - name: Mac Intel disponible ?
+        run: |
+          sw_vers; uname -m; sysctl -n machdep.cpu.brand_string
+          curl -sL -o pub.dmg https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Mac.dmg
+          hdiutil attach pub.dmg -nobrowse
+          "/Volumes/GTA Stream Clipper/GTA Stream Clipper.app/Contents/MacOS/GTA Stream Clipper" --version 2>&1 | tail -3 || echo "code retour $?"
