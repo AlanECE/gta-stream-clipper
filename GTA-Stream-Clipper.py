@@ -66,7 +66,8 @@ def mac_window(out: str):
     row.pack(pady=(16, 8))
 
     def open_ui():
-        webbrowser.open(url)
+        from clipper.app import server
+        webbrowser.open(server.URL or url)  # le port réellement pris (8765, ou le suivant s'il était occupé)
 
     def open_folder():
         Path(out).mkdir(parents=True, exist_ok=True)
@@ -107,6 +108,17 @@ def main():
                 os.environ["PATH"] = os.path.abspath(ff) + os.pathsep + os.environ.get("PATH", "")
         os.environ.setdefault("CLIPPER_FROZEN", "1")
         if sys.platform == "darwin":
+            # l'utilisateur a ouvert l'application (« Ouvrir quand même ») : on retire la quarantaine du navigateur
+            # de tout le paquet, pour que FFmpeg et les bibliothèques rangés dedans ne soient pas bloqués à leur tour.
+            # Sans effet si l'application tourne depuis un emplacement en lecture seule (image disque, translocation).
+            bundle = os.path.abspath(os.path.join(os.path.dirname(sys.executable), "..", ".."))
+            if bundle.endswith(".app"):
+                import subprocess
+                try:
+                    subprocess.Popen(["/usr/bin/xattr", "-dr", "com.apple.quarantine", bundle],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except OSError:
+                    pass
             # le FFmpeg statique du Mac cherche ses certificats dans un dossier qui n'existe que chez celui qui l'a
             # compilé : on lui donne ceux de l'application (sinon toute adresse https échoue)
             try:

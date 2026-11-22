@@ -21,6 +21,24 @@ CLIPS = Path.home() / "Movies" / "GTA Stream Clipper"
 FFMPEG = APP / "Contents" / "MacOS" / "ffmpeg"
 OUT.mkdir(parents=True, exist_ok=True)
 report = []
+NETWORK_PROMPT = '''
+tell application "System Events"
+  repeat with p in (every process)
+    try
+      repeat with w in (every window of p)
+        repeat with b in {"Don’t Allow", "Don't Allow", "Ne pas autoriser"}
+          if exists (button b of w) then
+            set t to name of p
+            click button b of w
+            return t
+          end if
+        end repeat
+      end repeat
+    end try
+  end repeat
+end tell
+return ""
+'''
 
 
 def say(*a):
@@ -82,6 +100,10 @@ try:
     say(f"   interface prête en {time.time() - t:.0f} s · version {cfg['version']} · dossier {cfg['sortie']}")
     time.sleep(12)
     shot("1-navigateur")
+    # macOS 15 peut demander « Autoriser … à trouver des appareils sur les réseaux locaux ? » : on refuse (le pire
+    # cas), et la suite du test vérifie que l'application marche sans
+    who = subprocess.run(["osascript", "-e", NETWORK_PROMPT], capture_output=True, text=True, timeout=60).stdout.strip()
+    say(f"   demande d'accès au réseau local : {'oui (' + who + '), refusée' if who else 'aucune'}")
     subprocess.run(["osascript", "-e", 'tell application "GTA Stream Clipper" to activate'])
     time.sleep(2)
     shot("1-fenetre-application")

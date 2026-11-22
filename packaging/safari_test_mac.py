@@ -55,7 +55,17 @@ try:
     say("1. l'application")
     t = time.time()
     subprocess.run(["open", "-n", str(APP)], check=True)
-    until(lambda: get("/api/config", 3), 120, "l'interface ne répond pas")
+    try:
+        until(lambda: get("/api/config", 3), 120, "l'interface ne répond pas sur le port 8765")
+    except SystemExit:
+        for port in range(8766, 8775):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{port}/api/config", timeout=2)
+                say(f"   l'interface a démarré sur le port {port} au lieu de 8765")
+                break
+            except OSError:
+                pass
+        raise
     say(f"   deuxième lancement : l'interface répond en {time.time() - t:.0f} s")
     lib = get("/api/library")
     if not lib:
@@ -162,6 +172,11 @@ finally:
             d.quit()
         except Exception:  # noqa: BLE001
             pass
+    if not ok:
+        subprocess.run(["screencapture", "-x", str(OUT / "echec-ecran.png")])
     subprocess.run(["osascript", "-e", 'quit app "GTA Stream Clipper"'])
+    log = Path.home() / "Library" / "Logs" / "GTA Stream Clipper.log"
+    if log.exists():
+        (OUT / "journal-application.log").write_bytes(log.read_bytes())
     (OUT / "compte-rendu.txt").write_text("\n".join(report) + "\n", encoding="utf-8")
 sys.exit(0 if ok else 1)
