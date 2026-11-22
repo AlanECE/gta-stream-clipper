@@ -53,8 +53,10 @@ d = None
 ok = False
 try:
     say("1. l'application")
+    t = time.time()
     subprocess.run(["open", "-n", str(APP)], check=True)
     until(lambda: get("/api/config", 3), 120, "l'interface ne répond pas")
+    say(f"   deuxième lancement : l'interface répond en {time.time() - t:.0f} s")
     lib = get("/api/library")
     if not lib:
         raise SystemExit("ÉCHEC : la bibliothèque est vide (lancer smoke_test_mac.py avant)")
@@ -70,8 +72,8 @@ try:
           "la liste des clips viraux ne s'affiche pas dans Safari")
     js("window.__err = []; addEventListener('error', e => __err.push(e.message + ' @' + (e.filename || '') + ':' + e.lineno));"
        "addEventListener('unhandledrejection', e => __err.push('promesse : ' + ((e.reason && e.reason.message) || e.reason)));")
-    say(f"   accueil : {js('return document.querySelectorAll(\"#vRes .card\").length')} clips viraux affichés · "
-        f"Safari {d.capabilities.get('browserVersion')}")
+    n = js("return document.querySelectorAll('#vRes .card').length")
+    say(f"   accueil : {n} clips viraux affichés · Safari {d.capabilities.get('browserVersion')}")
     d.save_screenshot(str(OUT / "1-accueil.png"))
 
     say("3. Bibliothèque → clic sur le clip")

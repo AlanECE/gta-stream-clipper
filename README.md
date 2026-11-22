@@ -10,8 +10,8 @@ sous-titres mot à mot. Gratuit, open source, sans compte et sans clé d'API.</p
 <p align="center">
   <a href="https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Setup.exe"><img src="https://img.shields.io/badge/%E2%AC%87%20T%C3%A9l%C3%A9charger-Windows-c026d3?style=for-the-badge" height="40" alt="Télécharger pour Windows"></a>
   &nbsp;
-  <a href="https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Mac.dmg"><img src="https://img.shields.io/badge/%E2%AC%87%20T%C3%A9l%C3%A9charger-Mac-1a1a1a?style=for-the-badge" height="40" alt="Télécharger pour Mac"></a>
-  <br><sub>Windows 10 / 11 (64 bits) · Mac à puce Apple (M1 et plus récents), macOS 12 ou plus · gratuit, sans compte</sub>
+  <a href="#sur-mac"><img src="https://img.shields.io/badge/%E2%AC%87%20Installer-Mac-1a1a1a?style=for-the-badge" height="40" alt="Installer sur Mac"></a>
+  <br><sub>Windows 10 / 11 (64 bits) · Mac à puce Apple ou Intel, macOS 12 ou plus · gratuit, sans compte</sub>
 </p>
 
 <p align="center"><img src="docs/screenshots/interface.png" width="760" alt="L'onglet Clips viraux"></p>
@@ -67,16 +67,31 @@ et double-clique sur `GTA-Stream-Clipper.exe`.
 
 ### Sur Mac
 
-1. Télécharge **[GTA-Stream-Clipper-Mac.dmg](https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Mac.dmg)**, ouvre-le et glisse
-   **GTA Stream Clipper** dans le dossier **Applications**.
-2. Ouvre l'application. Comme elle n'est pas certifiée par Apple (le certificat coûte 99 $ par an), macOS la bloque la
-   première fois : va dans **Réglages Système → Confidentialité et sécurité**, descends jusqu'au message sur
-   GTA Stream Clipper et clique sur **Ouvrir quand même**, puis confirme. Ce n'est à faire qu'une fois.
-3. Une petite fenêtre GTA Stream Clipper s'ouvre, et l'interface s'affiche dans ton navigateur. Fermer cette fenêtre
-   (ou `⌘ Cmd + Q`) arrête l'application. Tes clips sont rangés dans `Films/GTA Stream Clipper`.
+Mac à puce Apple (M1 à M5) ou Mac Intel, avec macOS 12 (Monterey) ou plus récent.
 
-Si macOS dit que l'application est endommagée, ou si rien ne se passe à l'ouverture : ouvre le Terminal, tape
-`xattr -dr com.apple.quarantine "/Applications/GTA Stream Clipper.app"`, puis relance l'application.
+**Le plus simple : une ligne dans le Terminal.** Ouvre le **Terminal** (`⌘ Cmd + Espace`, tape « Terminal », puis
+Entrée), colle cette ligne et appuie sur Entrée :
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AlanECE/gta-stream-clipper/main/install-mac.sh | bash
+```
+
+Elle télécharge la bonne version pour ton Mac, la range dans **Applications** et l'ouvre. macOS ne la bloque pas,
+parce qu'elle n'est pas passée par le navigateur. Pour mettre l'application à jour plus tard, recolle la même ligne
+([ce que fait le script](install-mac.sh)).
+
+**Ou à la main :**
+
+1. Télécharge la version de ton Mac : **[puce Apple](https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Mac.dmg)** ou
+   **[Intel](https://github.com/AlanECE/gta-stream-clipper/releases/latest/download/GTA-Stream-Clipper-Mac-Intel.dmg)** (menu Pomme → À propos de ce Mac : « Puce Apple M… » ou
+   « Processeur Intel »). Ouvre le `.dmg` et glisse **GTA Stream Clipper** dans le dossier **Applications**.
+2. Ouvre l'application. La première fois, macOS affiche « Apple n'a pas pu vérifier que GTA Stream Clipper ne
+   contient pas de logiciel malveillant » : elle n'est pas certifiée par Apple (le certificat coûte 99 $ par an).
+   Clique sur **Terminé**, va dans **Réglages Système → Confidentialité et sécurité**, descends jusqu'au message sur
+   GTA Stream Clipper, clique sur **Ouvrir quand même** et confirme. Ce n'est à faire qu'une fois.
+
+Une petite fenêtre GTA Stream Clipper s'ouvre, et l'interface s'affiche dans ton navigateur (Safari, Chrome…).
+Fermer cette fenêtre (ou `⌘ Cmd + Q`) arrête l'application. Tes clips sont rangés dans `Films/GTA Stream Clipper`.
 
 ### Bon à savoir sur l'application
 
@@ -222,9 +237,12 @@ python build_exe.py
 - **Windows** : `dist/GTA-Stream-Clipper/`, la version portable `dist/GTA-Stream-Clipper-Windows.zip` et, si
   [Inno Setup 6](https://jrsoftware.org/isinfo.php) est installé (ou indiqué par la variable `ISCC`), l'installeur
   `dist/GTA-Stream-Clipper-Setup.exe` (script : [`packaging/installer.iss`](packaging/installer.iss)).
-- **Mac** (puce Apple) : `dist/GTA Stream Clipper.app` et `dist/GTA-Stream-Clipper-Mac.dmg`. Le workflow
-  [Version Mac](.github/workflows/mac.yml) le construit sur un Mac de GitHub, le teste comme un utilisateur
-  (double-clic, un vrai clip viral, l'éditeur, Quitter) et joint le `.dmg` à chaque release publiée.
+- **Mac** : `dist/GTA Stream Clipper.app` et `dist/GTA-Stream-Clipper-Mac.dmg` (puce Apple) ou
+  `dist/GTA-Stream-Clipper-Mac-Intel.dmg` (Intel), selon le Mac qui construit. Le workflow
+  [Version Mac](.github/workflows/mac.yml) construit les deux sur des Mac de GitHub, avec des dépendances qui tournent
+  dès macOS 12 ([`packaging/check_mac.py`](packaging/check_mac.py) refuse un binaire qui exigerait plus). Il teste
+  chaque version comme un utilisateur (double-clic, un vrai clip viral, l'éditeur, la timeline, Quitter),
+  l'interface dans Safari, l'installation par le Terminal, puis joint les `.dmg` à chaque release publiée.
 
 ## Crédits et licences
 
