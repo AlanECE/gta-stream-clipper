@@ -1,8 +1,10 @@
 """Test de la version Mac, comme un utilisateur : double-clic sur l'application, l'interface répond, un vrai clip
 viral est monté, l'éditeur le refait, « Quitter » ferme tout, l'image disque s'ouvre.
 Compte rendu (captures, clip, journal) dans build/smoke/.   python packaging/smoke_test_mac.py
+GSC_APP=<chemin de l'application> : teste une application déjà installée (par exemple dans /Applications).
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -11,7 +13,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-APP = ROOT / "dist" / "GTA Stream Clipper.app"
+APP = Path(os.environ.get("GSC_APP") or ROOT / "dist" / "GTA Stream Clipper.app")
 DMG = next((ROOT / "dist").glob("GTA-Stream-Clipper-Mac*.dmg"), ROOT / "dist" / "GTA-Stream-Clipper-Mac.dmg")
 OUT = ROOT / "build" / "smoke"
 BASE = "http://127.0.0.1:8765"
@@ -160,6 +162,10 @@ try:
     say(f"   processus restants : {len(left)}")
 
     say("5. image disque")
+    if not DMG.exists():
+        say("   pas d'image disque à tester ici")
+        say("RÉSULTAT : tout est passé")
+        finish(True)
     m = subprocess.run(["hdiutil", "attach", "-nobrowse", "-readonly", str(DMG)], capture_output=True, text=True).stdout
     vol = next((ln.split("\t")[-1].strip() for ln in m.splitlines() if "/Volumes/" in ln), None)
     say(f"   contenu : {sorted(p.name for p in Path(vol).iterdir()) if vol else 'NON MONTÉE'}")

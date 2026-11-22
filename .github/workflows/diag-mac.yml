@@ -11,6 +11,9 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: Le .dmg publié, marqué « téléchargé par Safari »
         run: |
           sw_vers; uname -m
@@ -46,6 +49,18 @@ jobs:
           ( open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension" & )
           sleep 8
           screencapture -x diag/2-reglages.png
+      - name: « Ouvrir quand même », puis un vrai clip (FFmpeg rangé dans l'appli garde la quarantaine)
+        timeout-minutes: 25
+        run: |
+          A="/Applications/GTA Stream Clipper.app"
+          osascript -e 'tell application "System Events" to tell process "CoreServicesUIAgent" to click button "Done" of window 1' || true
+          pkill -f "GTA Stream Clipper" || true
+          echo "--- spctl --add"; sudo spctl --add --label "GTA Stream Clipper" "$A" 2>&1 || echo "code $?"
+          echo "--- spctl après"; spctl -a -vvv -t exec "$A" 2>&1 || true
+          echo "--- quarantaine de ffmpeg"; xattr -p com.apple.quarantine "$A/Contents/MacOS/ffmpeg/ffmpeg" || true
+          pip install -q certifi
+          GSC_APP="$A" python packaging/smoke_test_mac.py || echo "smoke : code $?"
+          cp -R build/smoke diag/smoke-quarantaine || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
