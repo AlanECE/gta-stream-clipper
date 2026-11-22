@@ -32,6 +32,8 @@ class Moment:
     words: list = field(default_factory=list)
     lang: str = "en"
     cutscene: bool = False
+    chat: str = ""        # les réactions du chat pendant le moment (« KEKW ×6 · 😂 ×3 »)
+    chat_bonus: float = 0.0  # 0 à 1 : le chat réagit (emotes, emojis, onomatopées) bien plus que d'habitude
 
     @property
     def score(self):
@@ -40,7 +42,7 @@ class Moment:
         malus = 0.0
         if self.cutscene:  # sauf s'il parle à son chat pendant la cinématique : là, c'est bien lui
             malus = 0.4 if STREAMER_TALK.search(self.text_in) else 1.5
-        return round(min(self.hype, 1.8) + 1.6 * self.bonus - malus, 2)
+        return round(min(self.hype, 1.8) + 1.6 * self.bonus + self.chat_bonus - malus, 2)
 
     @property
     def text(self):
@@ -98,6 +100,14 @@ def hype(loud: np.ndarray, chat: np.ndarray | None = None, chat_lag: int = 6) ->
         base = baseline(c) + 0.3
         score = score + np.clip((c / base - 1.0) / 1.5, 0, 2.5)
     return smooth(score, 3)
+
+
+def chat_bonus(reacts: list, a: float, b: float, per_sec: float) -> float:
+    """0 à 1 : combien de réactions du chat entre a et b, comparé à l'habitude du stream (per_sec réactions par
+    seconde). Quatre fois plus que d'habitude ou plus = 1."""
+    n = sum(1 for t, _ in reacts if a <= t <= b)
+    expected = max(per_sec * (b - a), 1.5)
+    return round(float(np.clip((n / expected - 1.0) / 3.0, 0.0, 1.0)), 2)
 
 
 def peaks(score: np.ndarray, k: int, min_gap: int, margin: int = 0) -> list[tuple[int, float]]:

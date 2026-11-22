@@ -9,6 +9,8 @@ from __future__ import annotations
 import contextlib
 import csv
 import datetime as dt
+import json
+import os
 import shutil
 import subprocess
 import time
@@ -22,6 +24,7 @@ from .pipeline import _words_in, write_clip
 from .util import adopt, hms, log, run, slug, why
 
 SEG = 20            # secondes par morceau
+AUTOUR = 120.0      # secondes de live gardées avant et après chaque clip (pour en déplacer le début et la fin)
 KEEP = 15 * 60      # vidéo gardée sur le disque : les 15 dernières minutes
 WINDOW = 30 * 60    # son gardé en mémoire pour connaître son niveau « normal »
 RETRIES = 12        # reconnexions de suite avant d'abandonner (environ 2 minutes)
@@ -31,6 +34,7 @@ class Recorder:
     def __init__(self, url: str, d: Path):
         self.url, self.d = url, d
         self.t0 = time.monotonic()
+        self.wall0 = dt.datetime.now()  # l'heure qu'il est au temps 0 de la session
         self.runs: list[tuple[int, float]] = []  # (numéro, décalage depuis le début de la session)
         self.p = None
         self.err = None
@@ -106,6 +110,22 @@ def cut(segs, a: float, b: float, out: Path) -> Path:
          "-c:a", "aac", "-b:a", "192k", out.name], cwd=out.parent)
     lst.unlink(missing_ok=True)
     return out
+
+
+def join(segs, a: float, b: float, out: Path) -> tuple[Path, float]:
+    """recolle SANS réencoder les morceaux qui couvrent [a, b] ; renvoie (fichier, temps de session de son début).
+    Rapide, et l'image d'origine reste intacte : le clip est refait à partir d'elle."""
+    use = [s for s in segs if s[2] > a and s[1] < b and s[0].exists()]
+    if not use:
+        raise RuntimeError("aucun morceau du live pour cette plage")
+    lst = out.with_suffix(".txt")
+    lst.write_text("".join(f"file '{p.name}'\n" for p, _, _ in use), encoding="utf-8")
+    tmp = out.with_name(out.stem + ".tmp.mp4")
+    run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", lst.name, "-map", "0:v:0", "-map", "0:a:0?",
+         "-c", "copy", "-movflags", "+faststart", tmp.name], cwd=out.parent)
+    lst.unlink(missing_ok=True)
+    os.replace(tmp, out)
+    return out, use[0][1]
 
 
 def is_live(url: str) -> tuple[bool | None, dict]:
@@ -192,10 +212,35 @@ def _session(url: str, opts, inf: dict, stop_at: float, pause) -> list[Path]:
         last_end = -1e9
         best_layout = None
         fails = n = 0
+        pending: list[dict] = []  # clips dont les 2 minutes d'après ne sont pas encore enregistrées
+
+        def complete(final=False):
+            """rallonge l'extrait des clips dont la suite est enregistrée (ou, à la fin, avec ce qu'il y a)"""
+            have = rec.segments()
+            end = max((x[2] for x in have), default=0.0)
+            for item in list(pending):
+                if not final and end < item["want"]:
+                    continue
+                try:
+                    use = [x for x in have if x[1] >= item["s0"] - 0.01 and x[1] < item["want"]]
+                    if use and abs(use[0][1] - item["s0"]) < 0.05:
+                        join(use, item["s0"], item["want"], item["path"])
+                        jp = item["json"]
+                        if jp.exists():
+                            meta = json.loads(jp.read_text(encoding="utf-8"))
+                            meta["section_complete"] = True
+                            jp.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+                    pending.remove(item)
+                except (RuntimeError, OSError) as e:  # fichier ouvert ailleurs : on réessaie au tour suivant
+                    if final:
+                        pending.remove(item)
+                    log(f"  extrait du clip pas encore rallongé ({why(e) if isinstance(e, RuntimeError) else e})")
+
         while True:
             if pause(10):
                 log("arrêt de l'écoute")
                 break
+            complete()
             if not rec.alive():
                 live, _ = is_live(url)
                 if live is False:
@@ -246,8 +291,11 @@ def _session(url: str, opts, inf: dict, stop_at: float, pause) -> list[Path]:
             log(f"moment fort à {hms(p)} (hype {s:.2f}) : on fabrique le clip")
             try:
                 with lock:
-                    section = cut(segs, a, b, work / f"section_{p}.mp4")
-                    wav = analyze.slice_wav(section, 0, b - a, work / f"section_{p}.wav")
+                    # l'extrait garde jusqu'à 2 minutes de live avant le moment (et la suite arrive plus tard)
+                    wa = max(a - AUTOUR, min(x[1] for x in segs))
+                    section, s0 = join(segs, wa, b, work / f"section_{p}.mp4")
+                    off = a - s0  # où est le temps a dans l'extrait
+                    wav = analyze.slice_wav(section, off, b - a, work / f"section_{p}.wav")
                     ws, lang = transcribe.words(wav, opts.langue)
                     wav.unlink(missing_ok=True)
                     ws = [Word(w.start + a, w.end + a, w.text) for w in ws]
@@ -255,14 +303,19 @@ def _session(url: str, opts, inf: dict, stop_at: float, pause) -> list[Path]:
                     inside = [w for w in ws if st - 0.05 <= w.start and w.end <= en + 0.3]
                     # la même note qu'en rediffusion : ce qu'il dit compte, une cinématique passe derrière
                     m = Moment(p, st, en, s, analyze.text_bonus(inside, en - st), ws, lang,
-                               analyze.letterboxed(source.frames_span(str(section), st - a, en - st)))
+                               analyze.letterboxed(source.frames_span(str(section), st - s0, en - st)))
+                    if live_chat:  # le chat qui réagit en masse (emotes, emojis, onomatopées) fait monter le score
+                        rx = live_chat.reactions(rec.t0)
+                        span = max(60.0, min(WINDOW, (rx[-1][0] - rx[0][0]) if len(rx) > 1 else 60.0))
+                        m.chat = chat.summary(rx, st, en + 12)
+                        m.chat_bonus = analyze.chat_bonus(rx, st, en + 12, len(rx) / span)
                     last_end = en
                     if m.score < opts.seuil:
                         log(f"  pas assez fort une fois écouté (score {m.score:.2f}"
                             f"{', cinématique' if m.cutscene else ''}), on passe")
                         section.unlink(missing_ok=True)
                         continue
-                    layout = facecam.detect(section, opts.cam, st - a, en - st)
+                    layout = facecam.detect(section, opts.cam, st - s0, en - st)
                     if best_layout is not None:  # la webcam ne bouge pas : on garde le cadre le plus sûr de la session
                         layout = facecam.consensus([best_layout, layout])[1]
                     if layout.kind == "split" and (best_layout is None or layout.conf > best_layout.conf):
@@ -271,12 +324,23 @@ def _session(url: str, opts, inf: dict, stop_at: float, pause) -> list[Path]:
                     title = render.fill_title(opts.titre, streamer, opts.jeu) if opts.titre \
                         else render.auto_title(streamer, opts.jeu, analyze.mood(words), n - 1, opts.titre_langue)
                     base_name = f"{slug(streamer, 30)}_live_{dt.datetime.now():%Y%m%d_%H%M%S}"
-                    made.append(write_clip(opts, out_dir, base_name, section, layout, words, st - a, en - st, title,
-                                           streamer, {"source": url, "source_link": url, "score": m.score}))
+                    reacts = live_chat.reactions(rec.t0) if live_chat else []
+                    made.append(write_clip(opts, out_dir, base_name, section, layout, words, st - s0, en - st, title,
+                                           streamer, {"source": url, "source_link": url, "score": m.score,
+                                                      "live": True, "langue": lang,
+                                                      "section_heure": (rec.wall0 + dt.timedelta(seconds=s0)).isoformat(timespec="seconds"),
+                                                      "chat": m.chat or chat.summary(reacts, st, en + 12)}))
+                    pending.append({"json": out_dir / f"{base_name}.json", "path": section, "s0": s0,
+                                    "want": en + AUTOUR})
             except RuntimeError as e:  # un clip raté n'arrête pas l'écoute
                 last_end = max(last_end, float(p))
                 log(f"  clip raté ({why(e)}), on continue")
     finally:
+        try:
+            if made:
+                complete(final=True)  # avant que les morceaux du live soient effacés
+        except Exception:  # noqa: BLE001
+            pass
         rec.stop()
         if live_chat:
             live_chat.stop = True

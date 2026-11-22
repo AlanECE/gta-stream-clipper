@@ -132,6 +132,22 @@ try:
                     "-vf", "scale=540:-2", str(OUT / "3-apres-editeur.jpg")])
     say(f"   refait en {r['secondes']} s")
 
+    say("3 bis. timeline : aperçu léger, bande d'images, clip raccourci d'une seconde de chaque côté")
+    tl = post(f"/api/clip/{cid}/timeline", {})
+    strip = urllib.request.urlopen(BASE + f"/filmstrip/{cid}?n=12", timeout=120).read()
+    coupe = get(f"/api/clip/{cid}")["coupe"]
+    say(f"   timeline prête : {tl['total']:.1f} s de stream · bande de {len(strip) // 1024} Ko")
+    t_in, dur = coupe["t_in"] + 1.0, coupe["dur"] - 2.0
+    r = wait_job(post("/api/jobs", {"type": "rerender", "id": cid, "titre": "Test Mac 🍎 ça marche", "style": "boite-jaune",
+                                    "mots": 1, "t_in": t_in, "dur": dur}))
+    if r["status"] != "fini":
+        raise SystemExit(f"ÉCHEC de la timeline : {r['error']}")
+    got = float(json.loads(subprocess.run([str(FFMPEG / "ffprobe"), "-v", "error", "-print_format", "json", "-show_format",
+                                           str(mp4)], capture_output=True, text=True).stdout)["format"]["duration"])
+    say(f"   clip refait en {r['secondes']} s : {got:.1f} s (attendu {dur:.1f} s)")
+    if abs(got - dur) > 0.5:
+        raise SystemExit("ÉCHEC : la nouvelle durée du clip n'est pas la bonne")
+
     say("4. Quitter (Cmd+Q)")
     subprocess.run(["osascript", "-e", 'quit app "GTA Stream Clipper"'])
     time.sleep(5)

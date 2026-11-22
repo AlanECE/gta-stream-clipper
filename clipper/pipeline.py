@@ -128,7 +128,8 @@ def clip_stream(url: str, opts) -> list[Path]:
             link = f"{url}{'&' if '?' in url else '?'}t={int(t0)}"
         base = f"{slug(streamer, 30)}_{day}_{int(t0)}"
         made.append(write_clip(opts, out_dir, base, section, layout, words, lead, dur, title, streamer,
-                               {"source": url, "source_link": link, "debut_stream": t0, "score": m.score}))
+                               {"source": url, "source_link": link, "debut_stream": t0, "score": m.score,
+                                "section_debut": t0 - lead, "langue": m.lang, "chat": m.chat}))
     if not opts.garder:
         for f in [*work.glob("audio_*.wav"), *work.glob("audio_*.ogg")]:
             f.unlink(missing_ok=True)
@@ -146,7 +147,8 @@ def find_moments(url, inf, plat, work: Path, start, end, full, opts) -> list[Mom
         log("moments déjà analysés : on reprend le cache")
         data = json.loads(cache.read_text(encoding="utf-8"))
         return [Moment(d["peak"], d["start"], d["end"], d["hype"], d["bonus"], [Word(**w) for w in d["words"]],
-                       d["lang"], d.get("cutscene", False)) for d in data]
+                       d["lang"], d.get("cutscene", False), d.get("chat", ""), d.get("chat_bonus", 0.0))
+                for d in data]
     ex = ThreadPoolExecutor(13)
     try:
         chat_job = None if getattr(opts, "sans_chat", False) else \
@@ -154,7 +156,7 @@ def find_moments(url, inf, plat, work: Path, start, end, full, opts) -> list[Mom
         low_job = ex.submit(source.low_video_url, url)
         audio = source.get_audio(url, work, start, end)
         loud = analyze.loudness(audio)
-        rate = chat_job.result() if chat_job else None
+        rate, reacts = chat_job.result() if chat_job else (None, [])
         log(f"son analysé ({hms(len(loud))})" + (" + chat" if rate is not None else ", sans chat"))
         score = analyze.hype(loud, rate)
         cands = analyze.peaks(score, k=max(opts.nb * 4, 8), min_gap=int(opts.duree * 1.5), margin=int(pre) + 2)
@@ -183,9 +185,14 @@ def find_moments(url, inf, plat, work: Path, start, end, full, opts) -> list[Mom
                 m.cutscene = False
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
+    per_sec = len(reacts) / max(1.0, end - start)  # réactions par seconde, d'habitude, sur ce stream
+    for m in moments:  # le chat réagit quelques secondes après : on regarde jusqu'à 12 s après la fin du moment
+        m.chat = chat.summary(reacts, start + m.start, start + m.end + 12)
+        m.chat_bonus = analyze.chat_bonus(reacts, start + m.start, start + m.end + 12, per_sec)
     for i, m in enumerate(moments, 1):
         log(f"  candidat {i}/{len(moments)} à {hms(start + m.peak)} · score {m.score:.2f} (son+chat {m.hype:.2f}, "
-            f"paroles {m.bonus:+.2f}{', cinématique' if m.cutscene else ''}) · « {said(m)[:70]} »")
+            f"paroles {m.bonus:+.2f}{', cinématique' if m.cutscene else ''}"
+            f"{f', réactions du chat {m.chat_bonus:+.2f} (' + m.chat + ')' if m.chat_bonus else ''}) · « {said(m)[:70]} »")
     cache.write_text(json.dumps([{**asdict(m), "words": [asdict(w) for w in m.words]} for m in moments],
                                 ensure_ascii=False), encoding="utf-8")
     if not opts.garder:  # tout ce qu'il faut est dans le cache : le son (115 Mo par heure) peut partir
@@ -202,7 +209,7 @@ def said(m: Moment) -> str:
 def write_moments(work: Path, moments: list[Moment], start: float):
     (work / "moments.json").write_text(json.dumps(
         [{"n": i, "debut": hms(start + m.start), "fin": hms(start + m.end), "score": m.score,
-          "cinematique": m.cutscene, "texte": said(m)} for i, m in enumerate(moments, 1)], ensure_ascii=False, indent=1), encoding="utf-8")
+          "cinematique": m.cutscene, "chat": m.chat, "texte": said(m)} for i, m in enumerate(moments, 1)], ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def redo(json_path: str, opts) -> Path:
@@ -239,7 +246,8 @@ def redo(json_path: str, opts) -> Path:
 
 def redo_with(json_path: str | Path, title: str | None = None, words: list[dict] | None = None,
               style: str | None = None, mots: int | None = None, sub_y: float | None = None,
-              cam: list | None = None, mise_en_page: str | None = None) -> Path:
+              cam: list | None = None, mise_en_page: str | None = None,
+              t_in: float | None = None, dur: float | None = None) -> Path:
     """refaire un clip avec un titre, des sous-titres (mots aux mêmes temps), un style ou un cadrage modifiés
     (interface). `cam` : cadre de la webcam tracé à la main (x, y, largeur, hauteur dans l'image source) ;
     `mise_en_page` : « auto » (détection), « jeu » (pas de webcam : le jeu au centre)."""
@@ -260,6 +268,13 @@ def redo_with(json_path: str | Path, title: str | None = None, words: list[dict]
                          for w in words if str(w.get("text", "")).strip()]
     if title is not None:
         meta["title"] = title
+    if t_in is not None and dur is not None:
+        new_in, new_dur = clamp_trim(section, float(t_in), float(dur))
+        if abs(new_in - meta["t_in"]) > 0.04 or abs(new_dur - meta["dur"]) > 0.04:
+            log(f"nouvelles coupes : début {new_in - meta['t_in']:+.1f} s, fin "
+                f"{(new_in + new_dur) - (meta['t_in'] + meta['dur']):+.1f} s")
+            meta["words"] = retime_words(meta, section, new_in, new_dur)
+            meta["t_in"], meta["dur"] = new_in, new_dur
     st = dict(meta.get("style", {}))
     if style:
         st["highlight"] = style
@@ -278,6 +293,136 @@ def redo_with(json_path: str | Path, title: str | None = None, words: list[dict]
         lines[0] = meta["title"]
         txt.write_text("\n".join(lines), encoding="utf-8")
     return jp.with_suffix(".mp4")
+
+
+MIN_CLIP, MAX_CLIP = 2.0, 180.0
+
+
+def clamp_trim(section: Path, t_in: float, dur: float) -> tuple[float, float]:
+    """un début et une durée qui tiennent dans l'extrait (2 s à 3 min)"""
+    total = video_info(section)[3]
+    t_in = min(max(0.0, t_in), max(0.0, total - MIN_CLIP))
+    dur = min(max(MIN_CLIP, dur), MAX_CLIP, total - t_in)
+    return round(t_in, 3), round(dur, 3)
+
+
+def retime_words(meta: dict, section: Path, new_in: float, new_dur: float) -> list[dict]:
+    """Les sous-titres d'un clip dont le début ou la fin ont bougé : les mots déjà là (corrigés ou non) sont gardés,
+    les morceaux ajoutés avant ou après sont transcrits."""
+    old_in, old_out = meta["t_in"], meta["t_in"] + meta["dur"]
+    new_out = new_in + new_dur
+    words = [(w["start"] + old_in, w["end"] + old_in, w["text"]) for w in meta.get("words", [])]
+    keep = [w for w in words if w[0] >= new_in - 0.05 and w[1] <= new_out + 0.3]
+    if new_in < old_in - 0.2 or new_out > old_out + 0.2:
+        a0 = max(0.0, new_in - 0.5)
+        a1 = min(video_info(section)[3], new_out + 0.5)
+        transcribe.load()
+        wav = analyze.slice_wav(section, a0, a1 - a0, section.with_name(f"coupe_{int(a0)}.wav"))
+        ws, _ = transcribe.words(wav, meta.get("langue"))
+        wav.unlink(missing_ok=True)
+        for w in ws:
+            s0, e0 = w.start + a0, w.end + a0
+            mid = (s0 + e0) / 2
+            if (mid < old_in or mid > old_out) and s0 >= new_in - 0.05 and e0 <= new_out + 0.3:
+                keep.append((s0, e0, w.text))
+    keep.sort()
+    merged = render.merge_elisions([Word(a - new_in, b - new_in, t) for a, b, t in keep])  # « c » + « 'est »
+    return [{"start": round(w.start, 3), "end": round(w.end, 3), "text": w.text} for w in merged]
+
+
+def section_debut(meta: dict) -> float | None:
+    """où commence l'extrait dans le stream d'origine (secondes), si on le sait"""
+    if meta.get("section_debut") is not None:
+        return float(meta["section_debut"])
+    if meta.get("debut_stream") is not None and not meta.get("live"):  # clips faits avant la 1.4
+        return float(meta["debut_stream"]) - float(meta.get("t_in", 0))
+    return None
+
+
+def widen_kind(meta: dict) -> str | None:
+    """comment aller chercher plus de stream autour du clip : « lien » (rediffusion, fichier), « viral » (via la
+    rediffusion du clip Twitch), None (live : c'est automatique ; ou rien à faire)"""
+    if meta.get("live"):
+        return None
+    if section_debut(meta) is not None and meta.get("source") and not meta.get("viral"):
+        return "lien"
+    v = meta.get("viral") or {}
+    if v.get("vod") and v.get("offset") is not None:
+        return "viral"
+    return None
+
+
+def _envelope(src, ss=None, t=None, hz=50):
+    import subprocess
+
+    import numpy as np
+    sr = 8000
+    cmd = ["ffmpeg", "-v", "error"] + (["-ss", f"{ss:.3f}"] if ss is not None else []) + ["-i", str(src)] + \
+          (["-t", f"{t:.3f}"] if t else []) + ["-vn", "-ac", "1", "-ar", str(sr), "-f", "s16le", "-"]
+    raw = subprocess.run(cmd, capture_output=True, timeout=600).stdout
+    a = np.frombuffer(raw[:len(raw) // 2 * 2], np.int16).astype(np.float32) / 32768
+    k = sr // hz
+    n = len(a) // k
+    return np.log10(np.sqrt((a[:n * k].reshape(n, k) ** 2).mean(1)) + 1e-4)
+
+
+def align(clip: Path, wide: Path, hz: int = 50) -> tuple[float, float]:
+    """où le son du clip se trouve dans `wide` : (secondes, corrélation de 0 à 1)"""
+    import numpy as np
+    k, v = _envelope(clip, hz=hz), _envelope(wide, hz=hz)
+    if len(k) < hz * 2 or len(v) <= len(k):
+        return 0.0, 0.0
+    kn = (k - k.mean()) / (k.std() + 1e-6)
+    best = (-9.0, 0)
+    win = np.lib.stride_tricks.sliding_window_view(v, len(k))
+    mu, sd = win.mean(1), win.std(1) + 1e-6
+    corr = ((win - mu[:, None]) / sd[:, None] * kn).mean(1)
+    i = int(np.argmax(corr))
+    best = (float(corr[i]), i)
+    return best[1] / hz, best[0]
+
+
+def widen(json_path: str | Path, avant: float = 120.0, apres: float = 120.0) -> Path:
+    """Va chercher le stream autour du clip (2 min avant et après) pour pouvoir en déplacer le début et la fin."""
+    jp = Path(json_path)
+    meta = json.loads(jp.read_text(encoding="utf-8"))
+    old = Path(meta["section"])
+    if not old.exists():
+        raise RuntimeError("l'extrait source a été supprimé : il faut refaire le clip depuis le début")
+    kind = widen_kind(meta)
+    t_in, dur = float(meta["t_in"]), float(meta["dur"])
+    if kind == "lien":
+        url, s0 = meta["source"], section_debut(meta)
+        a = s0 + t_in
+        ws = max(0.0, a - avant)
+        out = old.with_name(f"large_{int(ws)}_{int(a + dur + apres)}.mp4")
+        log(f"le stream de {hms(ws)} à {hms(a + dur + apres)} (2 min avant et après le clip)…")
+        source.grab(url, out, ws, (a + dur + apres) - ws)
+        meta.update(section=str(out.resolve()), t_in=round(a - ws, 3), section_debut=ws)
+    elif kind == "viral":
+        c = meta["viral"]
+        off, d = float(c["offset"]), float(c.get("duree") or dur)
+        ws = max(0.0, off - d - avant - 15)
+        we = off + apres + 15
+        out = old.with_name(f"large_{int(ws)}_{int(we)}.mp4")
+        log("le clip Twitch vient d'une rediffusion : on y va chercher 2 min avant et après…")
+        try:
+            source.grab(c["vod"], out, ws, we - ws)
+        except RuntimeError as e:
+            raise RuntimeError(f"la rediffusion de ce clip n'est pas accessible ({why(e)}) : impossible d'aller "
+                               "plus loin que le clip Twitch lui-même") from None
+        log("on retrouve le clip dans la rediffusion (par le son)…")
+        pos, corr = align(old, out)
+        if corr < 0.5:
+            out.unlink(missing_ok=True)
+            raise RuntimeError("impossible de retrouver ce clip dans la rediffusion (le son ne correspond pas)")
+        log(f"clip retrouvé à {pos:.2f} s (correspondance {corr:.0%})")
+        meta.update(section=str(out.resolve()), t_in=round(pos + t_in, 3), section_debut=ws)
+    else:
+        raise RuntimeError("pour ce clip, l'outil n'a pas accès au stream d'origine")
+    jp.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    log("prêt : tu peux déplacer le début et la fin du clip")
+    return out
 
 
 def clip_from_viral(c: dict, opts, index: int = 0) -> Path:
@@ -309,7 +454,7 @@ def clip_from_viral(c: dict, opts, index: int = 0) -> Path:
         else render.auto_title(streamer, opts.jeu, analyze.mood(words), index, opts.titre_langue)
     name = f"{slug(c.get('login') or streamer, 30)}_viral_{slug(c.get('id') or 'clip', 12)}"
     out = write_clip(opts, out_dir, name, section, layout, words, 0.0, dur, title, streamer,
-                     {"source": c.get("url"), "source_link": c.get("url"), "viral": c})
+                     {"source": c.get("url"), "source_link": c.get("url"), "viral": c, "langue": lang})
     for old in ("section.mp4", "section.json"):  # extrait de la version 1.2.0, remplacé par le clip lui-même
         (work / old).unlink(missing_ok=True)
     return out

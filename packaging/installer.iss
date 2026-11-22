@@ -1,6 +1,6 @@
 ; L'installeur Windows de GTA Stream Clipper (Inno Setup 6.7).
 ;   python build_exe.py      (le construit après l'application, si Inno Setup 6 est installé)
-; ou à la main : ISCC.exe /DAppVersion=1.3.0 packaging\installer.iss
+; ou à la main : ISCC.exe /DAppVersion=1.4.0 packaging\installer.iss
 ;
 ; Sans droits administrateur : l'application s'installe dans le dossier de l'utilisateur, avec une icône sur le
 ; Bureau et dans le menu Démarrer. Après la copie des fichiers, un tuto en 4 écrans montre comment s'en servir.
@@ -175,9 +175,9 @@ begin
   ID := AddTuto(ID, 'Comment ça marche · 2 sur 4', 'Crée le clip vertical',
     'tuto2.png', {#Tuto2W}, {#Tuto2H},
     '3. Écris ton titre si tu veux, choisis le style des sous-titres, puis « Créer le clip vertical ». Il arrive dans la Bibliothèque en 20 à 40 secondes (la toute première fois, compte quelques minutes).');
-  ID := AddTuto(ID, 'Comment ça marche · 3 sur 4', 'Corrige, puis télécharge (onglet Bibliothèque)',
+  ID := AddTuto(ID, 'Comment ça marche · 3 sur 4', 'Rallonge, corrige, puis télécharge (onglet Bibliothèque)',
     'tuto3.png', {#Tuto3W}, {#Tuto3H},
-    'Change le titre, le style ou un mot mal entendu, puis « Mettre à jour l''aperçu ». « Télécharger le MP4 » : le clip est prêt pour TikTok, Reels et Shorts.');
+    '1 et 2. Fais glisser les poignées jaunes : le clip commence plus tôt, finit plus tard. Titre, style et mots se corrigent plus bas. 3. « Mettre à jour l''aperçu ».  4. « Télécharger le MP4 ».');
   ID := AddTuto(ID, 'Comment ça marche · 4 sur 4', 'Un stream entier, ou un live',
     'tuto4.png', {#Tuto4W}, {#Tuto4H},
     '« Depuis un lien » : colle une rediffusion Twitch ou Kick. « En direct » : choisis un live, l''application le regarde et clippe toute seule. Coche « Veille » pour attendre le prochain live d''un streameur.');

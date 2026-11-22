@@ -27,7 +27,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .. import __version__
-from ..util import ASSETS, _tls, log, why
+from ..util import ASSETS, _tls, log, run, video_info, why
 
 STATIC = Path(__file__).resolve().parent / "static"
 LANGS = ["fr", "en", "es", "de", "it", "pt"]
@@ -100,6 +100,12 @@ class App:
         self.heavy = threading.Lock()  # un rendu à la fois (carte graphique, processeur)
         self._meta: dict[str, tuple[float, dict]] = {}  # fiches des clips déjà lues (clé : fichier, date)
         self._twitch: dict[tuple, tuple[float, list]] = {}  # recherches Twitch récentes
+        self._locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+
+    def lock_for(self, key: str) -> threading.Lock:
+        with self._locks_guard:
+            return self._locks.setdefault(key, threading.Lock())
 
     def twitch(self, kind: str, *args):
         """clips viraux ou lives, avec une courte mémoire : changer d'onglet ne réinterroge pas Twitch"""
@@ -198,8 +204,65 @@ class App:
                 "style": st.get("highlight", "jaune"), "mots": st.get("max_words", 2), "lien": m.get("source_link"),
                 "mp4": f"/media/{cid}.mp4?v={int((self.out / f'{cid}.mp4').stat().st_mtime)}",
                 "section_ok": Path(m.get("section", "")).exists(),
+                "chat": m.get("chat", ""),
                 "cadrage": {"type": L.get("kind"), "cam": L.get("box") or L.get("cam"), "l": L.get("src_w"),
-                            "h": L.get("src_h")}}
+                            "h": L.get("src_h")},
+                "coupe": self.trim_info(m)}
+
+    # ---------- timeline : début et fin du clip dans le stream d'origine
+    def trim_info(self, m: dict) -> dict | None:
+        from .. import pipeline
+        sec = Path(m.get("section", ""))
+        if not sec.exists():
+            return None
+        try:
+            total = video_info(sec)[3]
+        except Exception:  # noqa: BLE001
+            return None
+        t_in, dur = float(m.get("t_in", 0)), float(m.get("dur", 0))
+        kind = pipeline.widen_kind(m)
+        large = t_in >= 100 and total - (t_in + dur) >= 100
+        return {"t_in": t_in, "dur": dur, "total": round(total, 3), "origine": pipeline.section_debut(m),
+                "heure": m.get("section_heure"), "live": bool(m.get("live")),
+                "complet": bool(m.get("section_complete")) or not m.get("live"),
+                "elargir": kind if kind and not large else None,
+                "version": int(sec.stat().st_mtime)}
+
+    def proxy(self, cid: str) -> Path:
+        """l'extrait en 360p avec une image clé toutes les 0,5 s : la timeline et l'aperçu défilent sans à-coups"""
+        m = self.meta(self.out / f"{cid}.json")
+        sec = Path((m or {}).get("section", ""))
+        if not sec.exists():
+            raise RuntimeError("l'extrait source a été supprimé")
+        px = sec.with_name(sec.stem + "_apercu.mp4")
+        with self.lock_for(str(px)):
+            if px.exists() and px.stat().st_mtime >= sec.stat().st_mtime:
+                return px
+            log("préparation de la timeline (aperçu léger du stream)…")
+            tmp = px.with_name(px.stem + ".tmp.mp4")
+            run(["ffmpeg", "-y", "-v", "error", "-i", str(sec), "-vf", "scale=-2:360,fps=30", "-c:v", "libx264",
+                 "-preset", "ultrafast", "-crf", "30", "-g", "15", "-c:a", "aac", "-b:a", "64k", "-ac", "1",
+                 "-movflags", "+faststart", str(tmp)])
+            tmp.replace(px)
+            return px
+
+    def filmstrip(self, cid: str, n: int) -> Path:
+        """n vignettes du stream, côte à côte dans une seule image (la bande de la timeline)"""
+        px = self.proxy(cid)
+        n = max(4, min(int(n), 400))
+        out = self.out / ".posters" / f"{cid}_bande{n}_{int(px.stat().st_mtime)}.jpg"
+        out.parent.mkdir(exist_ok=True)
+        with self.lock_for(str(out)):
+            if not out.exists():
+                dur = video_info(px)[3]
+                run(["ffmpeg", "-y", "-v", "error", "-skip_frame", "nokey", "-i", str(px), "-vf",
+                     f"fps={(n + 0.5) / max(dur, 1):.6f},scale=96:54,tile={n}x1", "-frames:v", "1", "-q:v", "6",
+                     str(out)])
+                for old in out.parent.glob(f"{cid}_bande*.jpg"):  # les anciennes bandes de ce clip
+                    if old != out and old.stat().st_mtime < out.stat().st_mtime - 60:
+                        old.unlink(missing_ok=True)
+        return out
+
 
     def poster(self, cid: str) -> Path | None:
         mp4, jpg = self.out / f"{cid}.mp4", self.out / ".posters" / f"{cid}.jpg"
@@ -229,7 +292,7 @@ class App:
         jf = self.out / f"{cid}.json"
         m = self.meta(jf) or {}
         for f in (jf, jf.with_suffix(".mp4"), jf.with_suffix(".txt"), self.out / ".posters" / f"{cid}.jpg",
-                  self.out / ".posters" / f"{cid}_source.jpg"):
+                  self.out / ".posters" / f"{cid}_source.jpg", *(self.out / ".posters").glob(f"{cid}_bande*.jpg")):
             f.unlink(missing_ok=True)
         self._meta.pop(jf.name, None)
         sec = Path(m["section"]) if m.get("section") else None
@@ -241,6 +304,7 @@ class App:
         if str(sec.resolve()) in used:
             return
         sec.unlink(missing_ok=True)
+        sec.with_name(sec.stem + "_apercu.mp4").unlink(missing_ok=True)
         d = sec.parent
         if d != work and not any(d.glob("*.mp4")) and not any(d.glob("candidats_*.json")):
             shutil.rmtree(d, ignore_errors=True)
@@ -295,9 +359,18 @@ class App:
                 log("nouveau rendu du clip…")
                 pipeline.redo_with(self.out / f"{cid}.json", title=body.get("titre"), words=body.get("words"),
                                    style=body.get("style"), mots=body.get("mots"), cam=body.get("cam") or None,
-                                   mise_en_page=body.get("mise_en_page") or None)
+                                   mise_en_page=body.get("mise_en_page") or None,
+                                   t_in=body.get("t_in"), dur=body.get("dur"))
                 return {"clip": cid}
             return self.start("rerender", f"Mise à jour : {cid}", fn)
+        if t == "elargir":
+            cid = body["id"]
+
+            def fn(job):
+                pipeline.widen(self.out / f"{cid}.json")
+                self.proxy(cid)
+                return {"clip": cid}
+            return self.start("elargir", f"Élargir : {cid}", fn)
         raise ValueError(f"action inconnue : {t}")
 
 
@@ -406,6 +479,12 @@ def make_handler(app: App, password: str | None):
                 if m:
                     f = app.poster(m.group(1))
                     return self._file(f) if f else self._json({}, 404)
+                m = re.fullmatch(r"/proxy/([\w.\-]+)\.mp4", p)
+                if m:
+                    return self._file(app.proxy(m.group(1)))
+                m = re.fullmatch(r"/filmstrip/([\w.\-]+)", p)
+                if m:
+                    return self._file(app.filmstrip(m.group(1), int(q.get("n") or 60)))
                 m = re.fullmatch(r"/frame/([\w.\-]+)", p)
                 if m:
                     f = app.frame(m.group(1))
@@ -431,6 +510,11 @@ def make_handler(app: App, password: str | None):
                 if m and m.group(1) in app.jobs:
                     app.jobs[m.group(1)].stop.set()
                     return self._json({"ok": True})
+                m = re.fullmatch(r"/api/clip/([\w.\-]+)/timeline", p)
+                if m:
+                    px = app.proxy(m.group(1))
+                    return self._json({"proxy": f"/proxy/{m.group(1)}.mp4?v={int(px.stat().st_mtime)}",
+                                       "total": round(video_info(px)[3], 3)})
                 m = re.fullmatch(r"/api/clip/([\w.\-]+)/supprimer", p)
                 if m:
                     app.delete(m.group(1))

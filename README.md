@@ -33,13 +33,20 @@ Une application (Windows et Mac), un outil en ligne de commande et un skill pour
   streameur. Tu regardes le clip, tu cliques : il reprend le clip tel quel (le moment exact, avec son vrai son) et le
   remet au format vertical, avec le titre et les sous-titres.
 - **🔗 Depuis un lien** : une rediffusion Twitch ou Kick (YouTube marche aussi). Il écoute le stream, repère les moments
-  où le streameur s'emballe et te les propose, avec ce qu'il dit.
+  où le streameur s'emballe et ceux où le chat explose (emotes, emojis, « MDR », « ????? »), et te les propose
+  avec ce qu'il dit et les réactions du chat (💬 KEKW ×15 · MDR ×11).
 - **🔴 En direct** : les lives GTA du moment (filtrés par langue). Tu en choisis un, il le regarde et sort un clip
   environ une minute après chaque moment fort. Avec la **veille**, il attend qu'une chaîne passe en direct, clippe,
   puis attend son live suivant : sur un serveur, il reste branché sur les lives jour et nuit.
 - **📚 Bibliothèque** : tous tes clips. Aperçu, titre, sous-titres et style modifiables, puis téléchargement en MP4.
   Si la webcam est mal cadrée, tu traces son cadre à la souris sur l'image d'origine (ou tu choisis « pas de
   webcam »).
+- **✂️ Timeline** : sous l'aperçu, le stream d'origine 2 minutes avant et après le clip. Tu fais glisser les deux
+  poignées jaunes pour qu'il commence plus tôt ou plus tard, qu'il finisse plus tard ou plus tôt ; l'image du stream
+  suit la poignée en direct, avec les temps de début et de fin (l'heure du live pour un clip en direct). Zoom pour
+  être précis au dixième de seconde. Pour un clip viral, il va chercher les 2 minutes autour dans la rediffusion.
+
+<p align="center"><img src="docs/screenshots/editeur.jpg" width="760" alt="L'éditeur du clip et sa timeline"></p>
 
 ## Installation
 
@@ -183,13 +190,13 @@ Pour un vrai nom de domaine en HTTPS, mets un proxy (Caddy, Nginx) devant le por
 | Étape | Ce qu'il fait |
 |---|---|
 | Clips viraux | l'accès public du site Twitch (le même que yt-dlp) donne les clips les plus vus ; chaque clip est repris tel quel, avec son vrai son |
-| Moments d'un stream | le volume de sa voix par rapport à son niveau normal (+ la vitesse du chat Twitch ou YouTube, en bonus) |
+| Moments d'un stream | le volume de sa voix par rapport à son niveau normal, et le chat Twitch ou YouTube : sa vitesse, et surtout ses réactions (emotes KEKW ou LUL, emojis 😂, « MDR », « PTN », « ????? », cris en majuscules) bien au-dessus de l'habitude du stream |
 | Paroles | Whisper (faster-whisper) transcrit chaque moment sur ton ordinateur ; les mots de réaction (« bro », « chat », « oh my god »…) font monter le score |
 | Cinématiques | les bandes noires des scènes du jeu font baisser le score (les paroles sont celles des personnages) |
 | Webcam | un visage qui ne bouge pas pendant que le jeu bouge, et les bordures nettes autour de lui (le même cadre pour tout le stream) ; une webcam sans bordure est cadrée autour du visage |
 | Clip | webcam en haut (un tiers), jeu en bas, titre en boîte blanche sur la jonction, sous-titres mot à mot, son normalisé à -14 LUFS |
 
-Le chat est **compté, jamais lu**. S'il n'y a pas de webcam, le jeu est posé au centre sur un fond flouté ; si le
+Le chat n'est **ni gardé ni affiché** : seules ses réactions sont comptées, moment par moment. S'il n'y a pas de webcam, le jeu est posé au centre sur un fond flouté ; si le
 streameur est en plein écran, l'image est recadrée sur lui.
 
 ## Bon à savoir
@@ -202,8 +209,8 @@ streameur est en plein écran, l'image est recadrée sur lui.
   se téléchargent toujours : c'est le clip Twitch lui-même qui est repris.
 - La webcam est trouvée toute seule dans la plupart des cas. Quand elle ne l'est pas (webcam détourée, très sombre,
   dessin posé sur le stream), trace son cadre dans l'éditeur du clip.
-- L'extrait source de chaque clip reste dans le dossier `.travail` pour pouvoir le modifier ; supprimer un clip dans
-  la bibliothèque supprime aussi son extrait.
+- L'extrait source de chaque clip (2 minutes avant et après) reste dans le dossier `.travail` pour pouvoir le
+  modifier et le rallonger ; supprimer un clip dans la bibliothèque supprime aussi son extrait.
 
 ## Construire l'application
 

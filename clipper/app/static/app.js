@@ -108,7 +108,7 @@ function showMoments(r) {
   $("#lRes").innerHTML = `<h2>${esc(info.streamer || "")} · ${esc(info.titre || "")}</h2>
     <p class="hint">Du plus fort au plus faible. Garde ceux où le streameur réagit lui-même (pas les dialogues du jeu).</p>` +
     r.moments.map((m) => `<div class="moment"><div class="n">${m.n}</div><div class="txt"><div>« ${esc(m.texte || "…")} »</div>
-      <div class="s">${m.debut} → ${m.fin} · score ${m.score}${m.cinematique ? '<span class="pill warn">cinématique</span>' : ""}</div></div>
+      <div class="s">${m.debut} → ${m.fin} · score ${m.score}${m.cinematique ? '<span class="pill warn">cinématique</span>' : ""}${m.chat ? `<span class="pill chat">💬 ${esc(m.chat)}</span>` : ""}</div></div>
       <div class="act"><input type="text" placeholder="Titre (vide = automatique)" data-t="${m.n}"><button class="primary" data-n="${m.n}">Monter ce moment</button></div></div>`).join("");
   $$("#lRes button[data-n]").forEach((b) => b.onclick = async () => {
     const n = +b.dataset.n;
@@ -154,28 +154,208 @@ function renderLibrary(items) {
     <div class="meta"><div class="t">${esc(c.titre)}</div><div class="s">${esc(c.streamer)}</div></div></div>`).join("");
   $$("#bRes .card").forEach((el) => el.onclick = () => editClip(el.dataset.id));
 }
+// ---------- timeline : début et fin du clip dans le stream d'origine (comme l'éditeur vidéo de l'iPhone)
+const pad2 = (n) => String(n).padStart(2, "0");
+function fmtCut(sec, info, coarse) {
+  // l'heure du live (13:42:05,3), sinon le temps du stream (1:02:03,4), sinon le temps de l'extrait
+  if (info.heure) {
+    const d = new Date(new Date(info.heure).getTime() + sec * 1000);
+    const hms = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+    return coarse ? hms : `${hms},${Math.floor(d.getMilliseconds() / 100)}`;
+  }
+  const t = Math.max(0, (info.origine ?? 0) + sec);
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  const ss = coarse ? pad2(Math.floor(s)) : s.toFixed(1).padStart(4, "0").replace(".", ",");
+  return h ? `${h}:${pad2(m)}:${ss}` : `${m}:${ss}`;
+}
+const fmtDelta = (d) => Math.abs(d) < 0.05 ? "" : ` <em>${d > 0 ? "+" : "−"}${Math.abs(d).toFixed(1).replace(".", ",")} s</em>`;
+
+async function mountTrim(id, c, state) {
+  const info = c.coupe;
+  const wrap = $("#tWrap"), strip = $("#tStrip"), vid = $("#tVid"), sel = $("#tSel");
+  const dimL = $("#tDimL"), dimR = $("#tDimR"), ph = $("#tPh"), msg = $("#tMsg");
+  const MIN = 2, MAX = 180;
+  let total = info.total, inT = info.t_in, outT = info.t_in + info.dur, z = 1, playing = false, pending = null;
+  let active = "in", stripN = 0, stripTimer = null;
+  const orig = [inT, outT];
+  const changed = () => Math.abs(inT - orig[0]) > 0.04 || Math.abs(outT - orig[1]) > 0.04;
+  state.get = () => ({ t_in: Math.round(inT * 1000) / 1000, dur: Math.round((outT - inT) * 1000) / 1000, changed: changed() });
+
+  if (info.elargir) {
+    const b = $("#tWiden");
+    b.textContent = info.elargir === "viral" ? "⟷ Chercher 2 min avant et après dans la rediffusion" : "⟷ Charger 2 min avant et après";
+    b.classList.remove("hidden");
+    b.onclick = async () => {
+      b.disabled = true; msg.innerHTML = '<span class="spin"></span> On va chercher le stream autour du clip (une à deux minutes)…';
+      try {
+        const job = await api("/api/jobs", { type: "elargir", id });
+        track(job, (j) => { if (j.status === "fini") editClip(id); else { msg.textContent = "Impossible : " + j.error; b.disabled = false; } });
+      } catch (e) { msg.textContent = "Erreur : " + e.message; b.disabled = false; }
+    };
+  }
+  if (info.live && !info.complet) msg.textContent = "Le live est encore enregistré autour de ce clip : les 2 minutes d'après arrivent dès qu'elles sont passées (rouvre le clip dans un moment).";
+
+  let r;
+  try { r = await api(`/api/clip/${encodeURIComponent(id)}/timeline`, {}); }
+  catch (e) { $("#tLoad").textContent = "Timeline indisponible : " + e.message; return; }
+  if (!document.body.contains(strip)) return; // fenêtre fermée pendant la préparation
+  total = r.total || total;
+  outT = Math.min(outT, total);
+  vid.src = r.proxy;
+  vid.addEventListener("loadeddata", () => { $("#tLoad").classList.add("hidden"); vid.currentTime = inT; }, { once: true });
+  vid.addEventListener("seeked", () => { if (pending !== null) { const p = pending; pending = null; vid.currentTime = p; } });
+  const seek = (t) => { if (vid.seeking) pending = t; else vid.currentTime = t; };
+  const zmax = Math.max(1, total / 12); // au plus zoomé : 12 secondes dans la largeur
+  const pps = () => strip.clientWidth / total;
+
+  function place() {
+    const k = pps();
+    sel.style.left = inT * k + "px"; sel.style.width = (outT - inT) * k + "px";
+    dimL.style.width = inT * k + "px";
+    dimR.style.left = outT * k + "px"; dimR.style.width = Math.max(0, (total - outT) * k) + "px";
+    $("#tTc").innerHTML = `<span>Début <b>${fmtCut(inT, info)}</b>${fmtDelta(inT - orig[0])}</span>` +
+      `<span>Fin <b>${fmtCut(outT, info)}</b>${fmtDelta(outT - orig[1])}</span>` +
+      `<span>Durée <b>${(outT - inT).toFixed(1).replace(".", ",")} s</b></span>`;
+    $("#eSave").classList.toggle("glow", changed());
+    if (changed()) msg.textContent = "Nouvelles coupes : clique sur « Mettre à jour l'aperçu » pour refaire le clip.";
+  }
+  function ruler() {
+    const k = pps(), step = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600].find((s) => s * k >= 90) || 600;
+    let html = "";
+    for (let t = 0; t <= total + 0.01; t += step) html += `<span style="left:${t * k}px">${fmtCut(t, info, true)}</span>`;
+    $("#tRuler").style.width = strip.clientWidth + "px";
+    $("#tRuler").innerHTML = html;
+  }
+  function film() { // la bande de vignettes : plus il y a de place, plus il y a de vignettes
+    clearTimeout(stripTimer);
+    stripTimer = setTimeout(() => {
+      const n = Math.max(8, Math.min(400, Math.round(strip.clientWidth / 96)));
+      if (stripN && Math.abs(n - stripN) / stripN < 0.25) return;
+      stripN = n;
+      const img = new Image();
+      img.onload = () => { strip.style.backgroundImage = `url(${img.src})`; };
+      img.src = `/filmstrip/${encodeURIComponent(id)}?n=${n}&v=${info.version}`;
+    }, stripN ? 350 : 0);
+  }
+  function layout(keepCenter) {
+    const center = keepCenter ?? (inT + outT) / 2;
+    strip.style.width = Math.max(200, (wrap.clientWidth - 40) * z) + "px";
+    place(); ruler(); film();
+    wrap.scrollLeft = center * pps() + 20 - wrap.clientWidth / 2;
+  }
+  const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+  function autoscroll(x) {
+    const rc = wrap.getBoundingClientRect();
+    if (x > rc.right - 30) wrap.scrollLeft += 10;
+    else if (x < rc.left + 30) wrap.scrollLeft -= 10;
+  }
+  const timeAt = (x) => clamp((x - strip.getBoundingClientRect().left) / pps(), 0, total);
+
+  // les deux poignées
+  for (const [el, which] of [[$("#tHL"), "in"], [$("#tHR"), "out"]]) {
+    el.addEventListener("pointerdown", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      el.setPointerCapture(e.pointerId); vid.pause(); playing = false; $("#tPlay").textContent = "▶ Lire la sélection";
+      active = which; el.classList.add("on");
+      const move = (ev) => {
+        const t = Math.round(timeAt(ev.clientX) * 10) / 10;
+        if (which === "in") inT = clamp(t, Math.max(0, outT - MAX), outT - MIN);
+        else outT = clamp(t, inT + MIN, Math.min(total, inT + MAX));
+        place(); seek(which === "in" ? inT : outT); autoscroll(ev.clientX);
+      };
+      const up = () => { el.classList.remove("on"); el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up); };
+      el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+    });
+  }
+  // cliquer ou glisser ailleurs sur la bande : on se déplace dans le stream (sans toucher aux coupes)
+  strip.addEventListener("pointerdown", (e) => {
+    strip.setPointerCapture(e.pointerId); vid.pause(); playing = false; $("#tPlay").textContent = "▶ Lire la sélection";
+    seek(timeAt(e.clientX));
+    const move = (ev) => seek(timeAt(ev.clientX));
+    const up = () => { strip.removeEventListener("pointermove", move); strip.removeEventListener("pointerup", up); };
+    strip.addEventListener("pointermove", move); strip.addEventListener("pointerup", up);
+  });
+  // la tête de lecture suit l'aperçu
+  const tick = () => {
+    if (!document.body.contains(strip)) return;
+    ph.style.left = vid.currentTime * pps() + "px";
+    if (playing && vid.currentTime >= outT) { vid.pause(); playing = false; $("#tPlay").textContent = "▶ Lire la sélection"; vid.currentTime = inT; }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  $("#tPlay").onclick = () => {
+    if (playing) { vid.pause(); playing = false; $("#tPlay").textContent = "▶ Lire la sélection"; return; }
+    if (vid.currentTime < inT || vid.currentTime >= outT - 0.05) vid.currentTime = inT;
+    vid.play(); playing = true; $("#tPlay").textContent = "❚❚ Pause";
+  };
+  $("#tReset").onclick = () => { [inT, outT] = orig; place(); seek(inT); msg.textContent = ""; };
+  // zoom : le curseur, les boutons, ou Ctrl + molette
+  const zoomTo = (v) => { $("#tZoom").value = clamp(v, 0, 100); z = Math.pow(zmax, $("#tZoom").value / 100); layout(); };
+  $("#tZoom").oninput = () => zoomTo(+$("#tZoom").value);
+  $("#tZm").onclick = () => zoomTo(+$("#tZoom").value - 15);
+  $("#tZp").onclick = () => zoomTo(+$("#tZoom").value + 15);
+  wrap.addEventListener("wheel", (e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); zoomTo(+$("#tZoom").value + (e.deltaY < 0 ? 8 : -8)); } }, { passive: false });
+  // flèches du clavier : la dernière poignée touchée bouge de 0,1 s (1 s avec Maj)
+  const key = (e) => {
+    if (!document.body.contains(strip)) { document.removeEventListener("keydown", key); return; }
+    if (e.target.closest("input, textarea, select") || !["ArrowLeft", "ArrowRight"].includes(e.key)) return;
+    e.preventDefault();
+    const d = (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 1 : 0.1);
+    if (active === "in") inT = clamp(Math.round((inT + d) * 10) / 10, Math.max(0, outT - MAX), outT - MIN);
+    else outT = clamp(Math.round((outT + d) * 10) / 10, inT + MIN, Math.min(total, inT + MAX));
+    place(); seek(active === "in" ? inT : outT);
+  };
+  document.addEventListener("keydown", key);
+  new ResizeObserver(() => { if (document.body.contains(strip)) layout(); }).observe(wrap);
+  layout();
+}
+
 async function editClip(id) {
   const c = await api("/api/clip/" + encodeURIComponent(id));
   const cad = c.cadrage || {};
+  const trim = {};
   let style = c.style, mots = c.mots, cadrage = "", cam = null; // cadrage : "" = inchangé, "auto", "jeu", "main"
   const NOMS = { split: "webcam en haut, jeu en bas", jeu: "pas de webcam : le jeu au centre", plein: "streameur en plein écran" };
-  openModal(`<div class="edit"><div><video id="eVid" src="${c.mp4}" controls autoplay playsinline></video></div><div>
-    <h2>Modifier le clip</h2>
-    <div class="field"><span class="l">Titre (emojis acceptés)</span><input type="text" id="eTitre" value="${esc(c.titre)}"></div>
-    <div class="field"><span class="l">Style des sous-titres</span>${stylePicker(style)}</div>
-    <div class="field"><span class="l">Mots affichés à la fois</span><select id="eMots"><option value="1">1 (mot par mot)</option><option value="2">2</option><option value="3">3</option></select></div>
-    <div class="field"><span class="l">Sous-titres (corrige un mot, vide-le pour l'enlever ; les temps restent les mêmes)</span>
-      <div class="words">${c.words.map((w, i) => `<input data-i="${i}" value="${esc(w.text)}" size="${Math.max(3, w.text.length)}" title="${w.start.toFixed(1)} s">`).join("")}</div></div>
-    <div class="field"><span class="l">Cadrage : ${NOMS[cad.type] || "automatique"}</span>
-      <div class="row" id="eCad"><button data-c="main">✏️ Tracer la webcam</button><button data-c="jeu">Pas de webcam</button><button data-c="auto">Détection automatique</button></div>
-      <div id="eDraw" class="draw hidden"><img id="eFrame" draggable="false" alt=""><div id="eBox" class="rect hidden"></div></div>
-      <p class="hint" id="eCadMsg" style="margin:6px 0 0"></p></div>
-    <div class="row"><button class="primary" id="eSave"${c.section_ok ? "" : " disabled title=\"l'extrait source a été supprimé\""}>Mettre à jour l'aperçu</button>
-      <a href="/download/${encodeURIComponent(id)}"><button class="yellow">⬇ Télécharger le MP4</button></a>
-      <button id="eDel">Supprimer</button>${c.lien ? `<a href="${esc(c.lien)}" target="_blank" style="color:var(--muted);font-size:13px">voir sur Twitch</a>` : ""}</div>
-    <p class="hint" id="eMsg" style="margin-top:10px"></p></div></div>`);
+  const hasTrim = !!(c.coupe && c.section_ok);
+  openModal(`<div class="edit2">
+    <div class="ed-top"><div class="ed-prev"><video id="eVid" src="${c.mp4}" controls autoplay playsinline></video></div>
+      <div class="ed-side">
+        <h2>Modifier le clip</h2>
+        ${c.chat ? `<p class="hint chatline">💬 Le chat a réagi : ${esc(c.chat)}</p>` : ""}
+        ${hasTrim ? `<div class="srcbox"><video id="tVid" playsinline preload="auto"></video><div class="srcload" id="tLoad"><span class="spin"></span> Préparation de la timeline…</div></div>
+        <div class="tcrow"><div class="tc" id="tTc"></div><button id="tPlay">▶ Lire la sélection</button></div>` : ""}
+        <div class="row"><button class="primary" id="eSave"${c.section_ok ? "" : " disabled title=\"l'extrait source a été supprimé\""}>Mettre à jour l'aperçu</button>
+          <a href="/download/${encodeURIComponent(id)}"><button class="yellow">⬇ Télécharger le MP4</button></a>
+          <button id="eDel">Supprimer</button>${c.lien ? `<a href="${esc(c.lien)}" target="_blank" style="color:var(--muted);font-size:13px">voir sur Twitch</a>` : ""}</div>
+        <p class="hint" id="eMsg" style="margin-top:8px"></p>
+      </div></div>
+    ${hasTrim ? `<div class="trim">
+      <div class="trimbar"><b>Début et fin du clip</b><span class="hint">Fais glisser les poignées jaunes · flèches ← → pour 0,1 s · Ctrl + molette pour zoomer</span>
+        <span class="grow"></span>
+        <span class="zoom"><button id="tZm" title="Dézoomer">−</button><input type="range" id="tZoom" min="0" max="100" value="0"><button id="tZp" title="Zoomer">+</button></span>
+        <button id="tReset">Revenir au clip d'origine</button><button id="tWiden" class="hidden"></button></div>
+      <div class="stripwrap" id="tWrap"><div class="strip" id="tStrip"><div class="dim" id="tDimL"></div><div class="dim" id="tDimR"></div>
+        <div class="sel" id="tSel"><div class="h l" id="tHL"><i></i></div><div class="h r" id="tHR"><i></i></div></div><div class="ph" id="tPh"></div></div>
+        <div class="ruler" id="tRuler"></div></div>
+      <p class="hint" id="tMsg"></p></div>` : ""}
+    <div class="ed-fields">
+      <div>
+        <div class="field"><span class="l">Titre (emojis acceptés)</span><input type="text" id="eTitre" value="${esc(c.titre)}"></div>
+        <div class="field"><span class="l">Style des sous-titres</span>${stylePicker(style)}</div>
+        <div class="field"><span class="l">Mots affichés à la fois</span><select id="eMots"><option value="1">1 (mot par mot)</option><option value="2">2</option><option value="3">3</option></select></div>
+      </div>
+      <div>
+        <div class="field"><span class="l">Sous-titres (corrige un mot, vide-le pour l'enlever ; les temps restent les mêmes)</span>
+          <div class="words">${c.words.map((w, i) => `<input data-i="${i}" value="${esc(w.text)}" size="${Math.max(3, w.text.length)}" title="${w.start.toFixed(1)} s">`).join("")}</div></div>
+        <div class="field"><span class="l">Cadrage : ${NOMS[cad.type] || "automatique"}</span>
+          <div class="row" id="eCad"><button data-c="main">✏️ Tracer la webcam</button><button data-c="jeu">Pas de webcam</button><button data-c="auto">Détection automatique</button></div>
+          <div id="eDraw" class="draw hidden"><img id="eFrame" draggable="false" alt=""><div id="eBox" class="rect hidden"></div></div>
+          <p class="hint" id="eCadMsg" style="margin:6px 0 0"></p></div>
+      </div>
+    </div></div>`);
   $("#eMots").value = String(mots || 2);
   bindPicker($(".styles", $("#modalBox")), (s) => { style = s; });
+  if (hasTrim) mountTrim(id, c, trim);
 
   // --- cadrage : trois boutons ; « tracer » montre l'image d'origine, on y dessine le cadre de la webcam
   const draw = $("#eDraw"), img = $("#eFrame"), box = $("#eBox"), msg = $("#eCadMsg");
@@ -214,6 +394,8 @@ async function editClip(id) {
     $("#eSave").disabled = true; $("#eMsg").innerHTML = '<span class="spin"></span> Nouveau rendu…';
     const body = { type: "rerender", id, titre: $("#eTitre").value, words, style, mots: +$("#eMots").value };
     if (cadrage === "main") body.cam = cam; else if (cadrage) body.mise_en_page = cadrage;
+    const t = trim.get ? trim.get() : null;
+    if (t && t.changed) { body.t_in = t.t_in; body.dur = t.dur; $("#eMsg").innerHTML = '<span class="spin"></span> Nouveau rendu avec les nouvelles coupes (les mots ajoutés sont transcrits)…'; }
     try {
       const job = await api("/api/jobs", body);
       track(job, (j) => { if (j.status === "fini") editClip(id); else { $("#eMsg").textContent = "Erreur : " + j.error; $("#eSave").disabled = false; } });
