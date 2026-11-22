@@ -74,7 +74,19 @@ try:
     say(f"   {len(lib)} clip(s) · on édite {cid}")
 
     say("2. Safari")
-    d = webdriver.Safari()
+    # l'application vient d'ouvrir sa page dans Safari : on le ferme, sinon la session de test peut être refusée
+    subprocess.run(["osascript", "-e", 'quit app "Safari"'])
+    time.sleep(3)
+    for essai in range(1, 4):
+        try:
+            d = webdriver.Safari()
+            break
+        except Exception as e:  # noqa: BLE001
+            say(f"   session Safari refusée (essai {essai}) : {e.__class__.__name__} {str(e)[:120]}")
+            if essai == 3:
+                raise
+            subprocess.run(["osascript", "-e", 'quit app "Safari"'])
+            time.sleep(8)
     d.set_window_size(1440, 1000)
     d.get(URL)
     js = d.execute_script
